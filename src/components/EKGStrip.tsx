@@ -24,10 +24,6 @@ import type { LeadName } from '../engine/lead-calculator';
 const SMALL_SQ_PX = 4;   // 1mm at display density — scale up so it's visible on screen
 const LARGE_SQ_PX = SMALL_SQ_PX * 5; // 5 small = 1 large square
 
-// At 25mm/s: 25px/s → rate of pixels per millisecond
-const MM_PER_S = 25;
-const PX_PER_MS = (MM_PER_S * SMALL_SQ_PX) / 1000; // px per ms
-
 // 10mm/mV default gain
 const PX_PER_MV_BASE = 10 * SMALL_SQ_PX;
 

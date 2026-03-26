@@ -38,7 +38,7 @@ function isValveOrMuscle(name: string): boolean {
 }
 
 export function HeartGroup() {
-  const { scene } = useGLTF('/3d-vh-m-heart.glb');
+  const { scene } = useGLTF(`${import.meta.env.BASE_URL}3d-vh-m-heart.glb`);
   const outerRef = useRef<Group>(null);
   const innerRef = useRef<Group>(null);
   const cycleTimeMsRef = useRef(0);
@@ -113,4 +113,4 @@ export function HeartGroup() {
 }
 
 // Preload GLB so it's ready when the component mounts
-useGLTF.preload('/3d-vh-m-heart.glb');
+useGLTF.preload(`${import.meta.env.BASE_URL}3d-vh-m-heart.glb`);
