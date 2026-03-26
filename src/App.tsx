@@ -1,8 +1,9 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Scene3D } from './components/Scene3D';
 import { TwelveLeadGrid } from './components/TwelveLeadGrid';
 import { EKGStrip } from './components/EKGStrip';
 import { ControlPanel } from './components/ControlPanel';
+import { AboutModal } from './components/AboutModal';
 import { useSimulationStore } from './store/simulation-store';
 import { computeWCT, ELECTRODE_POSITIONS } from './engine/lead-calculator';
 import type { Vec3 } from './engine/cardiac-vector';
@@ -50,6 +51,7 @@ function Clock() {
 
 // ── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const [showAbout, setShowAbout] = useState(false);
   const customPos = useSimulationStore((s) => s.customElectrodePos);
   const heartRateBpm = useSimulationStore((s) => s.heartRateBpm);
   const activePathologyId = useSimulationStore((s) => s.activePathologyId);
@@ -146,9 +148,20 @@ export default function App() {
         </div>
       )}
 
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+
       {/* ── XP Taskbar ─────────────────────────────────────────────────────── */}
       <div className="xp-taskbar">
         <button className="xp-start-btn">⊞ Start</button>
+
+        {/* About button */}
+        <button
+          className="xp-btn"
+          onClick={() => setShowAbout(true)}
+          style={{ fontSize: 10, padding: '1px 8px' }}
+        >
+          ? About
+        </button>
 
         {/* Active window pills */}
         <div style={{ display: 'flex', gap: 3 }}>
