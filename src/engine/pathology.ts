@@ -28,26 +28,20 @@ export interface CombinedPathology {
   timingOverrides: Partial<CycleTimings>;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function scaleQRS(
-  segs: BezierSegment3D[], sx: number, sy: number, sz: number,
-): BezierSegment3D[] {
-  return segs.map((s) => ({
-    p0: [s.p0[0] * sx, s.p0[1] * sy, s.p0[2] * sz],
-    p1: [s.p1[0] * sx, s.p1[1] * sy, s.p1[2] * sz],
-    p2: [s.p2[0] * sx, s.p2[1] * sy, s.p2[2] * sz],
-    p3: [s.p3[0] * sx, s.p3[1] * sy, s.p3[2] * sz],
-  }));
-}
-
 // ── QRS loop variants ────────────────────────────────────────────────────────
 
+// LBBB: no septal Q (initial forces leftward), broad slurred R in I/aVL/V5-V6,
+// terminal forces superior → mean axis -40° to -60° (left axis deviation).
+// Frank: net X strongly positive (leftward), net Y negative (superior).
 const LBBB_QRS: BezierSegment3D[] = [
-  { p0: [0,0,0], p1: [0.05,0.02,-0.03], p2: [0.10,0.05,-0.05], p3: [0.10,0.08,-0.05] },
-  { p0: [0.10,0.08,-0.05], p1: [0.40,0.30,-0.15], p2: [0.90,0.60,-0.30], p3: [1.30,0.70,-0.40] },
-  { p0: [1.30,0.70,-0.40], p1: [1.20,0.50,-0.45], p2: [0.80,0.20,-0.40], p3: [0.40,-0.05,-0.30] },
-  { p0: [0.40,-0.05,-0.30], p1: [0.20,-0.15,-0.20], p2: [0.05,-0.08,-0.08], p3: [0,0,0] },
+  // Phase 1: no septal deflection — initial forces leftward (LBB blocked, RBB conducts first)
+  { p0: [0,0,0],          p1: [0.05,0.02,0.04],   p2: [0.12,0.04,0.06],   p3: [0.18,0.05,0.06] },
+  // Phase 2: LV free wall — broad, strongly leftward, initially inferior then turning superior
+  { p0: [0.18,0.05,0.06], p1: [0.50,0.25,-0.05],  p2: [1.00,0.30,-0.20],  p3: [1.30,0.10,-0.35] },
+  // Phase 3: peak — leftward, now superior (negative Y)
+  { p0: [1.30,0.10,-0.35],p1: [1.35,-0.15,-0.40], p2: [1.20,-0.30,-0.38], p3: [0.70,-0.35,-0.25] },
+  // Phase 4: terminal return — superior, leftward
+  { p0: [0.70,-0.35,-0.25],p1:[0.30,-0.25,-0.12],  p2: [0.08,-0.10,-0.04], p3: [0,0,0] },
 ];
 
 const RBBB_QRS: BezierSegment3D[] = [
@@ -66,6 +60,34 @@ const WPW_QRS: BezierSegment3D[] = [
   { p0: [1.00,0.65,-0.18], p1: [1.05,0.52,-0.28], p2: [0.82,0.25,-0.30], p3: [0.45,0.05,-0.22] },
   // Terminal return
   { p0: [0.45,0.05,-0.22], p1: [0.18,-0.12,-0.12], p2: [0.05,-0.08,-0.04], p3: [0,0,0] },
+];
+
+// LVH: hypertrophied LV dominates — large leftward amplitude, terminal forces superior.
+// Mean axis ~-20° to -40° (mild left axis deviation).
+// Frank: very strong positive X, net Y slightly negative (superior terminal forces).
+const LVH_QRS: BezierSegment3D[] = [
+  // Phase 1: normal septal (rightward/anterior)
+  { p0: [0,0,0],           p1: [-0.03,0.01,0.06],  p2: [-0.07,0.02,0.10],  p3: [-0.10,0.03,0.12] },
+  // Phase 2: massively enlarged LV free wall — high amplitude leftward, inferior
+  { p0: [-0.10,0.03,0.12], p1: [0.30,0.28,0.05],   p2: [0.90,0.45,-0.10],  p3: [1.60,0.35,-0.22] },
+  // Phase 3: peak — leftward, turning superior (strain pattern)
+  { p0: [1.60,0.35,-0.22], p1: [1.70,0.05,-0.28],  p2: [1.50,-0.25,-0.30], p3: [0.90,-0.35,-0.22] },
+  // Phase 4: terminal — leftward, superior return
+  { p0: [0.90,-0.35,-0.22],p1: [0.40,-0.20,-0.10],  p2: [0.10,-0.05,-0.02], p3: [0,0,0] },
+];
+
+// RVH: RV dominates — mean axis +100° to +150° (right axis deviation).
+// Frank: net X strongly negative (rightward), net Y positive (inferior), net Z positive (anterior).
+// Produces tall R in V1, deep S in V5-V6, right axis, dominant R in aVR.
+const RVH_QRS: BezierSegment3D[] = [
+  // Phase 1: initial forces rightward + anterior (RV depolarizes early in RVH)
+  { p0: [0,0,0],            p1: [-0.05,0.03,0.12],  p2: [-0.15,0.08,0.22],  p3: [-0.25,0.14,0.28] },
+  // Phase 2: dominant RV free wall — strongly rightward, inferior, anterior
+  { p0: [-0.25,0.14,0.28],  p1: [-0.55,0.38,0.34],  p2: [-0.90,0.58,0.28],  p3: [-1.10,0.62,0.18] },
+  // Phase 3: peak and turning — rightward, inferior
+  { p0: [-1.10,0.62,0.18],  p1: [-1.00,0.50,0.05],  p2: [-0.65,0.28,-0.08], p3: [-0.20,0.08,-0.05] },
+  // Phase 4: terminal return
+  { p0: [-0.20,0.08,-0.05], p1: [-0.08,0.03,-0.01],  p2: [-0.02,0.01,0.00],  p3: [0,0,0] },
 ];
 
 // ── Conduction presets (dropdown) ────────────────────────────────────────────
@@ -95,15 +117,15 @@ export const CONDUCTION_PRESETS: Record<string, ConductionPreset> = {
   lvh: {
     id: 'lvh',
     name: 'Left Ventricular Hypertrophy',
-    qrsSegments: scaleQRS(DEFAULT_QRS_SEGMENTS, 1.8, 1.2, 0.8),
-    stVector: [-0.15, 0.00, -0.10],
+    qrsSegments: LVH_QRS,
+    stVector: [-0.18, 0.00, -0.12],  // lateral strain ST-T changes
     timingOverrides: {},
   },
   rvh: {
     id: 'rvh',
     name: 'Right Ventricular Hypertrophy',
-    qrsSegments: scaleQRS(DEFAULT_QRS_SEGMENTS, 0.6, 1.0, 1.5),
-    stVector: [0.10, 0.00, -0.10],
+    qrsSegments: RVH_QRS,
+    stVector: [0.12, 0.00, -0.10],   // RV strain: STE V1-V2, STD lateral
     timingOverrides: {},
   },
   wpw: {

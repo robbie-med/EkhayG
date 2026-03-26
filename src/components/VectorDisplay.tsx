@@ -24,10 +24,10 @@ import { vectorToScene } from '../engine/coordinates';
 import { useSimulationStore } from '../store/simulation-store';
 
 // Scale factor: Frank vector in mV → heart-local units.
-// Component lives inside HeartGroup (scale=2). Heart centered bounds ≈ ±0.06.
-// QRS peak ≈ 1.1 mV → want loop to fill ~80% of heart interior:
-//   0.06 * 0.8 / 1.1 ≈ 0.044 in heart-local, but parent scale=2 so ÷2 → 0.044
-const SCALE = 0.044;
+// Lives inside HeartGroup (parent scale=2). Heart half-extent ≈ 0.062 local.
+// QRS peak magnitude ≈ 1.28 mV (diagonal of peak vector).
+// Target: loop fills ~60% of heart interior → 0.062 * 0.6 / 1.28 ≈ 0.029
+const SCALE = 0.029;
 
 // ── Pre-computed VCG loop ─────────────────────────────────────────────────
 
@@ -152,7 +152,7 @@ export function VectorArrow() {
     groupRef.current.setRotationFromQuaternion(helper.quaternion);
 
     // Scale shaft length; head stays fixed size
-    const headLen = Math.min(0.012, len * 0.3);
+    const headLen = Math.min(0.008, len * 0.3);
     const shaftLen = Math.max(0.001, len - headLen);
 
     // Shaft: cylinder along +Y, centered at y = shaftLen/2
