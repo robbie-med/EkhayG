@@ -11,7 +11,6 @@ import { useFrame } from '@react-three/fiber';
 import { Line } from '@react-three/drei';
 import {
   ArrowHelper, Vector3, Group,
-  ConeGeometry, CylinderGeometry,
   MeshStandardMaterial,
 } from 'three';
 import type { Mesh } from 'three';
