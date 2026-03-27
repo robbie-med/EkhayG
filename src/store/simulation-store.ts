@@ -10,17 +10,12 @@ import type { Vec3 } from '../engine/cardiac-vector';
 export type DisplayMode = 'scrolling' | '12lead' | 'single';
 export type Theme = 'dark' | 'light';
 export type PlaybackSpeed = 0.25 | 0.5 | 1 | 2;
-
-interface ArteriesState {
-  lad: boolean;  // true = patent, false = occluded
-  lcx: boolean;
-  rca: boolean;
-}
+export type ArteryKey = 'lad' | 'd1' | 'lcx' | 'om' | 'rca' | 'pda';
 
 interface SimulationState {
   heartRateBpm: number;
-  activePathologyId: string;
-  arteries: ArteriesState;
+  activeConditions: string[];
+  arteries: Record<ArteryKey, boolean>;
   displayMode: DisplayMode;
   playbackSpeed: PlaybackSpeed;
   gain: 5 | 10 | 20; // mm/mV
@@ -41,8 +36,8 @@ interface SimulationState {
 
   // Actions
   setHeartRate: (bpm: number) => void;
-  setPathology: (id: string) => void;
-  toggleArtery: (artery: keyof ArteriesState) => void;
+  toggleCondition: (id: string) => void;
+  toggleArtery: (key: ArteryKey) => void;
   setDisplayMode: (mode: DisplayMode) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   setGain: (gain: 5 | 10 | 20) => void;
@@ -62,8 +57,8 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   setTheme: (t) => set({ theme: t }),
 
   heartRateBpm: 75,
-  activePathologyId: 'normal',
-  arteries: { lad: true, lcx: true, rca: true },
+  activeConditions: [],
+  arteries: { lad: true, d1: true, lcx: true, om: true, rca: true, pda: true },
   displayMode: 'scrolling',
   playbackSpeed: 1,
   gain: 10,
@@ -78,9 +73,14 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   isPlacementMode: false,
 
   setHeartRate: (bpm) => set({ heartRateBpm: bpm }),
-  setPathology: (id) => set({ activePathologyId: id }),
-  toggleArtery: (artery) =>
-    set((s) => ({ arteries: { ...s.arteries, [artery]: !s.arteries[artery] } })),
+  toggleCondition: (id) =>
+    set((s) => ({
+      activeConditions: s.activeConditions.includes(id)
+        ? s.activeConditions.filter((c) => c !== id)
+        : [...s.activeConditions, id],
+    })),
+  toggleArtery: (key) =>
+    set((s) => ({ arteries: { ...s.arteries, [key]: !s.arteries[key] } })),
   setDisplayMode: (mode) => set({ displayMode: mode }),
   setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
   setGain: (gain) => set({ gain }),

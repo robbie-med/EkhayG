@@ -3,21 +3,21 @@
  * Windows XP–styled vertical control panel.
  */
 
-import { useMemo } from 'react';
 import { useSimulationStore } from '../store/simulation-store';
-import { CONDUCTION_PRESETS } from '../engine/pathology';
+import { CONDITION_PRESETS, getCombinedPathology } from '../engine/pathology';
 import { ELECTRODE_POSITIONS } from '../engine/lead-calculator';
 import { getDefaultTimings } from '../engine/cardiac-vector';
-import { getCombinedPathology } from '../engine/pathology';
 import { computeQRSAxis, axisInterpretation } from '../engine/axis-calculator';
 import type { Vec3 } from '../engine/cardiac-vector';
 
-const ARTERY_LABELS: Record<string, string> = { lad: 'LAD', lcx: 'LCx', rca: 'RCA' };
+const ARTERY_LABELS: Record<string, string> = {
+  lad: 'LAD', d1: 'D1', lcx: 'LCx', om: 'OM', rca: 'RCA', pda: 'PDA',
+};
 
-const CONDUCTION_GROUPS = [
-  { label: 'Normal',      ids: ['normal'] },
+const CONDITION_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Conduction',  ids: ['lbbb', 'rbbb', 'wpw'] },
   { label: 'Hypertrophy', ids: ['lvh', 'rvh'] },
+  { label: 'Atrial',      ids: ['lae', 'rae'] },
 ];
 
 // ── Groupbox wrapper ─────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ function describeArc(cx: number, cy: number, r: number, startDeg: number, endDeg
 export function ControlPanel() {
   const {
     heartRateBpm, setHeartRate,
-    activePathologyId, setPathology,
+    activeConditions, toggleCondition,
     playbackSpeed, setPlaybackSpeed,
     gain, setGain,
     paperSpeed, setPaperSpeed,
@@ -128,12 +128,10 @@ export function ControlPanel() {
     theme, setTheme,
   } = useSimulationStore();
 
-  // Compute QRS axis
-  const qrsAxisDeg = useMemo(() => {
-    const combined = getCombinedPathology(activePathologyId, arteries);
-    const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
-    return computeQRSAxis(timings, combined.qrsSegments);
-  }, [heartRateBpm, activePathologyId, arteries]);
+  // Compute QRS axis — fast enough to compute inline (120 Bézier samples per render)
+  const combined = getCombinedPathology(activeConditions, arteries);
+  const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
+  const qrsAxisDeg = computeQRSAxis(timings, combined.qrsSegments);
 
   return (
     <div className="xp-panel" style={{ display: 'flex', flexDirection: 'column', gap: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
@@ -171,21 +169,34 @@ export function ControlPanel() {
         <AxisDial deg={qrsAxisDeg} />
       </Group>
 
-      {/* Conduction */}
-      <Group title="Conduction Preset">
-        <select
-          className="xp-select"
-          value={activePathologyId}
-          onChange={(e) => setPathology(e.target.value)}
-        >
-          {CONDUCTION_GROUPS.map((g) => (
-            <optgroup key={g.label} label={g.label}>
-              {g.ids.map((id) => (
-                <option key={id} value={id}>{CONDUCTION_PRESETS[id]?.name ?? id}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+      {/* Conditions */}
+      <Group title="Conditions">
+        {CONDITION_GROUPS.map((g) => (
+          <div key={g.label} style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 9, color: 'var(--xp-text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{g.label}</div>
+            <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+              {g.ids.map((id) => {
+                const preset = CONDITION_PRESETS[id];
+                if (!preset) return null;
+                const on = activeConditions.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleCondition(id)}
+                    className={`xp-btn${on ? ' active' : ''}`}
+                    title={preset.description}
+                    style={on ? { borderLeft: `3px solid ${preset.vectorColor}` } : {}}
+                  >
+                    {preset.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+        {activeConditions.length === 0 && (
+          <div style={{ fontSize: 9, color: 'var(--xp-text-muted)' }}>Normal sinus rhythm</div>
+        )}
       </Group>
 
       {/* Gain + Paper Speed */}
@@ -200,8 +211,8 @@ export function ControlPanel() {
 
       {/* Coronary Arteries */}
       <Group title="Coronary Arteries">
-        <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
-          {(['lad', 'lcx', 'rca'] as const).map((key) => (
+        <div style={{ display: 'flex', gap: 4, marginBottom: 4, flexWrap: 'wrap' }}>
+          {(['lad', 'd1', 'lcx', 'om', 'rca', 'pda'] as const).map((key) => (
             <button
               key={key}
               onClick={() => toggleArtery(key)}

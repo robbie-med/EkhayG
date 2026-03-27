@@ -4,7 +4,7 @@
  * Axis = direction of the mean QRS vector in the frontal plane (X-Y in Frank coords).
  */
 
-import { getCardiacVector, getDefaultTimings } from './cardiac-vector';
+import { getCardiacVector } from './cardiac-vector';
 import type { BezierSegment3D, CycleTimings } from './cardiac-vector';
 
 /** Mean frontal plane axis in degrees (-180 to +180).

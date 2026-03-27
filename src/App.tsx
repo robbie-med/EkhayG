@@ -54,7 +54,7 @@ export default function App() {
   const [showAbout, setShowAbout] = useState(false);
   const customPos = useSimulationStore((s) => s.customElectrodePos);
   const heartRateBpm = useSimulationStore((s) => s.heartRateBpm);
-  const activePathologyId = useSimulationStore((s) => s.activePathologyId);
+  const activeConditions = useSimulationStore((s) => s.activeConditions);
   const theme = useSimulationStore((s) => s.theme);
 
   // Sync theme to DOM
@@ -185,7 +185,9 @@ export default function App() {
 
         {/* Tray */}
         <div className="xp-tray">
-          <span style={{ fontSize: 10, opacity: 0.8 }}>{activePathologyId.toUpperCase()}</span>
+          <span style={{ fontSize: 10, opacity: 0.8 }}>
+            {activeConditions.length === 0 ? 'NSR' : activeConditions.map((c) => c.toUpperCase()).join(' + ')}
+          </span>
           <div className="xp-statusbar-divider" />
           <Clock />
         </div>

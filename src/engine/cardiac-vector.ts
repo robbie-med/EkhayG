@@ -72,56 +72,57 @@ function smoothstep(t: number): number {
   return t * t * (3 - 2 * t);
 }
 
-// ── P-wave loop (from VECTOR_REFERENCE.md) ─────────────────────────────────
-const P_WAVE_SEGMENTS: BezierSegment3D[] = [
+// ── QRS loop (from VECTOR_REFERENCE.md) ────────────────────────────────────
+// Normal axis target: ~+60° (mean vector leftward + inferior, ratio Y/X ≈ 1.73)
+const QRS_SEGMENTS: BezierSegment3D[] = [
   {
+    // Phase 1: Septal depolarization — rightward, anterior (small Q in lateral leads)
     p0: [0.00, 0.00, 0.00],
-    p1: [0.03, 0.02, 0.02],
-    p2: [0.08, 0.06, 0.03],
-    p3: [0.12, 0.08, 0.03],
+    p1: [-0.03, 0.02, 0.06],
+    p2: [-0.07, 0.04, 0.10],
+    p3: [-0.10, 0.06, 0.12],
   },
   {
-    p0: [0.12, 0.08, 0.03],
-    p1: [0.10, 0.06, 0.02],
-    p2: [0.05, 0.03, 0.01],
+    // Phase 2a: Main free wall — leftward, inferior, slightly posterior
+    p0: [-0.10, 0.06, 0.12],
+    p1: [0.15, 0.35, 0.08],
+    p2: [0.50, 0.75, -0.05],
+    p3: [0.80, 1.00, -0.15],
+  },
+  {
+    // Phase 2b: peak — strongly leftward + inferior
+    p0: [0.80, 1.00, -0.15],
+    p1: [0.95, 0.90, -0.22],
+    p2: [0.75, 0.60, -0.25],
+    p3: [0.45, 0.30, -0.20],
+  },
+  {
+    // Phase 3: terminal — rightward, superior (S wave)
+    p0: [0.45, 0.30, -0.20],
+    p1: [0.20, 0.05, -0.12],
+    p2: [0.05, -0.05, -0.04],
     p3: [0.00, 0.00, 0.00],
   },
 ];
 
-// ── QRS loop (from VECTOR_REFERENCE.md) ────────────────────────────────────
-const QRS_SEGMENTS: BezierSegment3D[] = [
+// ── P-wave loop (from VECTOR_REFERENCE.md) ─────────────────────────────────
+export const P_WAVE_SEGMENTS: BezierSegment3D[] = [
   {
-    // Phase 1: Septal depolarization — L→R, anterior
     p0: [0.00, 0.00, 0.00],
-    p1: [-0.03, 0.01, 0.06],
-    p2: [-0.07, 0.02, 0.10],
-    p3: [-0.10, 0.03, 0.12],
+    p1: [-0.03, 0.04, 0.04],
+    p2: [ 0.02, 0.06, 0.06],
+    p3: [ 0.08, 0.08, 0.05],
   },
   {
-    // Phase 2a: Main free wall — leftward, inferior, slightly posterior
-    p0: [-0.10, 0.03, 0.12],
-    p1: [0.15, 0.20, 0.10],
-    p2: [0.60, 0.50, 0.00],
-    p3: [1.00, 0.70, -0.15],
-  },
-  {
-    // Phase 2b: peak and turning
-    p0: [1.00, 0.70, -0.15],
-    p1: [1.10, 0.60, -0.25],
-    p2: [0.90, 0.30, -0.30],
-    p3: [0.50, 0.05, -0.25],
-  },
-  {
-    // Phase 3: terminal — rightward, superior (S wave)
-    p0: [0.50, 0.05, -0.25],
-    p1: [0.20, -0.15, -0.15],
-    p2: [0.05, -0.10, -0.05],
-    p3: [0.00, 0.00, 0.00],
+    p0: [ 0.08, 0.08, 0.05],
+    p1: [ 0.12, 0.08, 0.03],
+    p2: [ 0.08, 0.06, 0.02],
+    p3: [ 0.00, 0.00, 0.00],
   },
 ];
 
 // ── T-wave loop (from VECTOR_REFERENCE.md) ─────────────────────────────────
-const T_WAVE_SEGMENTS: BezierSegment3D[] = [
+export const T_WAVE_SEGMENTS: BezierSegment3D[] = [
   {
     p0: [0.00, 0.00, 0.00],
     p1: [0.10, 0.05, 0.05],
@@ -149,16 +150,25 @@ export interface CardiacVectorState {
 
 /**
  * Compute the cardiac dipole vector at a given time within the cycle.
- * @param cycleTimeMs - time in ms from the start of the cycle (0 to cycleLengthMs)
- * @param timings     - segment durations
- * @param stVector    - optional additive injury vector during ST segment (for STEMI etc.)
- * @param qrsSegments - override QRS loop (for BBB etc.)
+ * @param cycleTimeMs   - time in ms from the start of the cycle
+ * @param timings       - segment durations
+ * @param stVector      - additive injury vector during ST segment (ischemia)
+ * @param qrsSegments   - override QRS Bézier loop (BBB, hypertrophy, etc.)
+ * @param tWaveSegments - override T-wave Bézier loop (discordance, strain, etc.)
+ *
+ * Physics of T-wave in ischemia:
+ *   vector(t) = tWaveLoop(phaseT) + stVector × (1 − phaseT)
+ *   The stVector contribution fades linearly as ischemic cells repolarize,
+ *   while the tWaveLoop describes the underlying repolarization dipole pattern.
+ *   This guarantees continuity at the ST→T boundary (both sides equal stVector at t=0).
  */
 export function getCardiacVector(
   cycleTimeMs: number,
   timings: CycleTimings,
   stVector: Vec3 = [0, 0, 0],
   qrsSegments: BezierSegment3D[] = QRS_SEGMENTS,
+  tWaveSegments: BezierSegment3D[] = T_WAVE_SEGMENTS,
+  pWaveSegments: BezierSegment3D[] = P_WAVE_SEGMENTS,
 ): CardiacVectorState {
   const { pDuration, prDuration, qrsDuration, stDuration, tDuration } = timings;
 
@@ -174,10 +184,9 @@ export function getCardiacVector(
   let phaseT = 0;
 
   if (cycleTimeMs < prStart) {
-    // P-wave
     phase = 'p';
     phaseT = smoothstep(cycleTimeMs / pDuration);
-    vector = evaluatePiecewise(P_WAVE_SEGMENTS, phaseT);
+    vector = evaluatePiecewise(pWaveSegments, phaseT);
   } else if (cycleTimeMs < qrsStart) {
     // PR segment — isoelectric
     phase = 'pr';
@@ -189,30 +198,26 @@ export function getCardiacVector(
     phaseT = smoothstep((cycleTimeMs - qrsStart) / qrsDuration);
     vector = evaluatePiecewise(qrsSegments, phaseT);
   } else if (cycleTimeMs < tStart) {
-    // ST segment — isoelectric + optional injury vector, smoothly ramped
+    // ST segment: ramp in over first 25%, then hold at full amplitude.
+    // No ramp-out here — the T-wave blend below provides the continuous exit.
     phase = 'st';
     phaseT = (cycleTimeMs - stStart) / stDuration;
-    // Ramp in over first 25%, sustain, ramp out over last 25%
-    let stGain: number;
-    if (phaseT < 0.25) {
-      stGain = smoothstep(phaseT / 0.25);
-    } else if (phaseT > 0.75) {
-      stGain = smoothstep((1 - phaseT) / 0.25);
-    } else {
-      stGain = 1;
-    }
+    const stGain = phaseT < 0.25 ? smoothstep(phaseT / 0.25) : 1;
     vector = [stVector[0] * stGain, stVector[1] * stGain, stVector[2] * stGain];
   } else if (cycleTimeMs < tpStart) {
-    // T-wave + residual ST injury blended into early T
+    // T-wave: repolarization dipole + fading injury current.
+    // physics: V(t) = tLoop(phaseT) + stVector × (1 − phaseT)
+    //   At phaseT=0: V = [0,0,0] + stVector = stVector  → continuous with ST end ✓
+    //   At phaseT=1: V = tLoop(1) + 0 = [0,0,0]         → returns to baseline ✓
+    //   The stVector term models the injury current fading as ischemic cells repolarize.
     phase = 't';
     phaseT = smoothstep((cycleTimeMs - tStart) / tDuration);
-    const tBase = evaluatePiecewise(T_WAVE_SEGMENTS, phaseT);
-    // Blend ST injury into early portion of T-wave (fades over first 40%)
-    const stBlend = phaseT < 0.4 ? (1 - phaseT / 0.4) * 0.5 : 0;
+    const tBase = evaluatePiecewise(tWaveSegments, phaseT);
+    const stFade = 1 - phaseT;
     vector = [
-      tBase[0] + stVector[0] * stBlend,
-      tBase[1] + stVector[1] * stBlend,
-      tBase[2] + stVector[2] * stBlend,
+      tBase[0] + stVector[0] * stFade,
+      tBase[1] + stVector[1] * stFade,
+      tBase[2] + stVector[2] * stFade,
     ];
   } else {
     // TP segment — electrical diastole

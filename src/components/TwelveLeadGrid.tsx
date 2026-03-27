@@ -103,7 +103,7 @@ export function TwelveLeadGrid() {
   const lastTsRef = useRef<number | null>(null);
   const rafRef = useRef(0);
 
-  const { heartRateBpm, activePathologyId, arteries, playbackSpeed, gain } = useSimulationStore();
+  const { heartRateBpm, activeConditions, arteries, playbackSpeed, gain } = useSimulationStore();
 
   // Pre-compute lead vectors (stable — only changes if electrode positions change)
   const leadVectors = computeLeadVectors(ELECTRODE_POSITIONS);
@@ -118,7 +118,7 @@ export function TwelveLeadGrid() {
     const b = buffersRef.current;
     ALL_LEADS.forEach((l) => { b[l] = new Array(TOTAL_W).fill(0); });
     cycleTimeMsRef.current = 0;
-  }, [heartRateBpm, activePathologyId, arteries, playbackSpeed, gain]);
+  }, [heartRateBpm, activeConditions, arteries, playbackSpeed, gain]);
 
   const drawLabel = useCallback(
     (ctx: CanvasRenderingContext2D, text: string, x: number, y: number) => {
@@ -135,7 +135,7 @@ export function TwelveLeadGrid() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const combined = getCombinedPathology(activePathologyId, arteries);
+    const combined = getCombinedPathology(activeConditions, arteries);
     const baseTimings = getDefaultTimings(heartRateBpm);
     const timings = { ...baseTimings, ...combined.timingOverrides };
     const cycleLen = 60000 / heartRateBpm;
@@ -149,7 +149,7 @@ export function TwelveLeadGrid() {
 
       cycleTimeMsRef.current = (cycleTimeMsRef.current + dtMs * playbackSpeed) % cycleLen;
       const cVec = getCardiacVector(
-        cycleTimeMsRef.current, timings, combined.stVector, combined.qrsSegments,
+        cycleTimeMsRef.current, timings, combined.stVector, combined.qrsSegments, combined.tWaveSegments, combined.pWaveSegments,
       );
 
       // Push one voltage sample per lead into each buffer
@@ -264,7 +264,7 @@ export function TwelveLeadGrid() {
       lastTsRef.current = null;
     };
   }, [
-    heartRateBpm, activePathologyId, arteries, playbackSpeed, gain,
+    heartRateBpm, activeConditions, arteries, playbackSpeed, gain,
     leadVectors, drawLabel,
   ]);
 

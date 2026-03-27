@@ -10,7 +10,7 @@ import { useGLTF } from '@react-three/drei';
 import { Box3, Vector3, MeshStandardMaterial, Mesh } from 'three';
 import type { Group, Object3D } from 'three';
 import { CoronaryArteries } from './coronary-arteries';
-import { VCGLoopTrail, VectorArrow } from '../components/VectorDisplay';
+import { VCGLoopTrail, VectorArrow, IschemiaVectors, ConditionVectors } from '../components/VectorDisplay';
 import { getDefaultTimings } from '../engine/cardiac-vector';
 import { getCombinedPathology } from '../engine/pathology';
 import { useSimulationStore } from '../store/simulation-store';
@@ -68,9 +68,9 @@ export function HeartGroup() {
   useFrame((_, delta) => {
     if (!innerRef.current) return;
 
-    const { heartRateBpm, playbackSpeed, activePathologyId, arteries } =
+    const { heartRateBpm, playbackSpeed, activeConditions, arteries } =
       useSimulationStore.getState();
-    const combined = getCombinedPathology(activePathologyId, arteries);
+    const combined = getCombinedPathology(activeConditions, arteries);
     const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
     const cycleLen = 60000 / heartRateBpm;
 
@@ -108,6 +108,8 @@ export function HeartGroup() {
       {/* Phase 6: VCG loop + vector arrow — inside heart, shares heart transform */}
       <VCGLoopTrail />
       <VectorArrow />
+      <IschemiaVectors />
+      <ConditionVectors />
     </group>
   );
 }
