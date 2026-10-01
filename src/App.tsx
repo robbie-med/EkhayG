@@ -139,6 +139,7 @@ export default function App() {
             <EKGStrip
               leadName="I"
               customLeadVector={customLeadVector}
+              customElectrodePosition={customPos!}
               label="Custom"
               width={window.innerWidth - 16}
               height={100}

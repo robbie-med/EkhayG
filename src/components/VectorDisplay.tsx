@@ -14,29 +14,24 @@ import {
   MeshStandardMaterial,
 } from 'three';
 import type { Mesh } from 'three';
-import {
-  getCardiacVector,
-  getDefaultTimings,
-} from '../engine/cardiac-vector';
-import { getCombinedPathology, CONDITION_PRESETS, ARTERY_ST_VECTORS } from '../engine/pathology';
+import { getCardiacVector } from '../engine/cardiac-vector';
+import { updateSimulation } from '../engine/simulation-cache';
+import { CONDITION_PRESETS } from '../engine/pathology';
 import { vectorToScene } from '../engine/coordinates';
 import { useSimulationStore } from '../store/simulation-store';
 import type { ArteryKey } from '../store/simulation-store';
 
 // Scale factor: Frank vector in mV → heart-local units.
-// Lives inside HeartGroup (parent scale=2). Heart half-extent ≈ 0.062 local.
-// QRS peak magnitude ≈ 1.28 mV (diagonal of peak vector).
-// Target: loop fills ~60% of heart interior → 0.062 * 0.6 / 1.28 ≈ 0.029
 const SCALE = 0.029;
 
 // ── Pre-computed VCG loop ─────────────────────────────────────────────────
 
 const PHASE_COLORS = {
-  p:   '#ffaa00',  // orange-yellow
-  pr:  '#334455',  // near-invisible isoelectric
-  qrs: '#00ee44',  // bright green
-  st:  '#334455',  // near-invisible
-  t:   '#00ccff',  // cyan
+  p:   '#ffaa00',
+  pr:  '#334455',
+  qrs: '#00ee44',
+  st:  '#334455',
+  t:   '#00ccff',
   tp:  '#334455',
 };
 
@@ -47,10 +42,11 @@ interface LoopSegment {
 
 function buildLoopSegments(
   heartRateBpm: number,
-  combined: ReturnType<typeof getCombinedPathology>,
+  activeConditions: string[],
+  arteries: Record<string, boolean>,
 ): LoopSegment[] {
-  const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
-  const cycleLen = 60000 / heartRateBpm;
+  const sim = updateSimulation({ heartRateBpm, activeConditions, arteries });
+  const cycleLen = sim.activationMap.phaseBoundaries.cycleLength;
   const N = 300;
   const segments: LoopSegment[] = [];
   let currentPhase = '';
@@ -58,7 +54,7 @@ function buildLoopSegments(
 
   for (let i = 0; i <= N; i++) {
     const t = (i / N) * cycleLen;
-    const state = getCardiacVector(t, timings, combined.stVector, combined.qrsSegments, combined.tWaveSegments, combined.pWaveSegments);
+    const state = getCardiacVector(t);
     const sp = vectorToScene(state.vector);
 
     if (state.phase !== currentPhase) {
@@ -81,14 +77,9 @@ function buildLoopSegments(
 export function VCGLoopTrail() {
   const { heartRateBpm, activeConditions, arteries, showVCGLoop } = useSimulationStore();
 
-  const combined = useMemo(
-    () => getCombinedPathology(activeConditions, arteries),
-    [activeConditions, arteries],
-  );
-
   const segments = useMemo(
-    () => buildLoopSegments(heartRateBpm, combined),
-    [heartRateBpm, combined],
+    () => buildLoopSegments(heartRateBpm, activeConditions, arteries),
+    [heartRateBpm, activeConditions, arteries],
   );
 
   if (!showVCGLoop) return null;
@@ -129,13 +120,14 @@ export function VectorArrow() {
 
     const { heartRateBpm, playbackSpeed, activeConditions, arteries } =
       useSimulationStore.getState();
-    const combined = getCombinedPathology(activeConditions, arteries);
-    const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
-    const cycleLen = 60000 / heartRateBpm;
+
+    // Ensure simulation is up to date
+    const sim = updateSimulation({ heartRateBpm, activeConditions, arteries });
+    const cycleLen = sim.activationMap.phaseBoundaries.cycleLength;
 
     cycleRef.current = (cycleRef.current + delta * 1000 * playbackSpeed) % cycleLen;
 
-    const state = getCardiacVector(cycleRef.current, timings, combined.stVector, combined.qrsSegments, combined.tWaveSegments, combined.pWaveSegments);
+    const state = getCardiacVector(cycleRef.current);
     const [sx, sy, sz] = vectorToScene(state.vector);
     const len = Math.sqrt(sx * sx + sy * sy + sz * sz) * SCALE;
 
@@ -146,20 +138,16 @@ export function VectorArrow() {
 
     groupRef.current.visible = true;
 
-    // Orient along the vector
     const dir = new Vector3(sx, sy, sz).normalize();
     const helper = new ArrowHelper(dir, new Vector3(0, 0, 0), 1);
     groupRef.current.setRotationFromQuaternion(helper.quaternion);
 
-    // Scale shaft length; head stays fixed size
     const headLen = Math.min(0.008, len * 0.3);
     const shaftLen = Math.max(0.001, len - headLen);
 
-    // Shaft: cylinder along +Y, centered at y = shaftLen/2
     shaftRef.current.scale.set(1, shaftLen, 1);
     shaftRef.current.position.set(0, shaftLen / 2, 0);
 
-    // Head: cone, base at shaftLen, tip at len
     headRef.current.scale.set(1, headLen, 1);
     headRef.current.position.set(0, shaftLen + headLen / 2, 0);
   });
@@ -168,11 +156,9 @@ export function VectorArrow() {
 
   return (
     <group ref={groupRef}>
-      {/* Shaft */}
       <mesh ref={shaftRef} material={SHAFT_MAT}>
         <cylinderGeometry args={[0.002, 0.002, 1, 8]} />
       </mesh>
-      {/* Arrowhead */}
       <mesh ref={headRef} material={HEAD_MAT}>
         <coneGeometry args={[0.005, 1, 8]} />
       </mesh>
@@ -180,97 +166,26 @@ export function VectorArrow() {
   );
 }
 
-// ── Ischemia injury-current vectors ──────────────────────────────────────────
-
-// Territory centers in heart-local coords (Frank coord space, scaled by SCALE)
-const TERRITORY_CENTERS: Record<ArteryKey, [number, number, number]> = {
-  lad: [ 0.005, -0.010,  0.040],  // anterior LV
-  d1:  [ 0.025,  0.000,  0.032],  // anterolateral LV
-  lcx: [ 0.040,  0.000,  0.000],  // lateral LV
-  om:  [ 0.038, -0.005, -0.025],  // posterolateral LV
-  rca: [ 0.000, -0.030, -0.015],  // inferior wall
-  pda: [ 0.010, -0.040, -0.025],  // posterior-inferior
-};
-
-// Arrow scale: ST vectors have magnitude ~0.3-0.5 mV; scale so arrow ≈ 0.025 units
-const ISCHEMIA_ARROW_SCALE = 0.025;
-
-const ISCHEMIA_SHAFT_MAT = new MeshStandardMaterial({
-  color: '#cc0000',
-  roughness: 0.4,
-  metalness: 0.1,
-  emissive: '#550000',
-});
-const ISCHEMIA_HEAD_MAT = new MeshStandardMaterial({
-  color: '#990000',
-  roughness: 0.4,
-  metalness: 0.1,
-  emissive: '#440000',
-});
-
-interface IschemiaArrowProps {
-  arteryKey: ArteryKey;
-}
-
-function IschemiaArrow({ arteryKey }: IschemiaArrowProps) {
-  const stVec = ARTERY_ST_VECTORS[arteryKey];
-  if (!stVec) return null;
-
-  const center = TERRITORY_CENTERS[arteryKey];
-
-  // Convert ST vector (Frank coords) to scene coords, then normalize and scale
-  const [sx, sy, sz] = vectorToScene(stVec);
-  const mag = Math.sqrt(sx * sx + sy * sy + sz * sz);
-  if (mag < 1e-6) return null;
-
-  const nx = sx / mag;
-  const ny = sy / mag;
-  const nz = sz / mag;
-
-  const arrowLen = ISCHEMIA_ARROW_SCALE;
-  const headLen = arrowLen * 0.3;
-  const shaftLen = arrowLen - headLen;
-
-  // Compute rotation from +Y to the direction vector using ArrowHelper
-  const dir = new Vector3(nx, ny, nz);
-  const helper = new ArrowHelper(dir, new Vector3(0, 0, 0), 1);
-
-  return (
-    <group position={center} quaternion={helper.quaternion}>
-      {/* Shaft */}
-      <mesh
-        material={ISCHEMIA_SHAFT_MAT}
-        position={[0, shaftLen / 2, 0]}
-        scale={[1, shaftLen, 1]}
-      >
-        <cylinderGeometry args={[0.0012, 0.0012, 1, 8]} />
-      </mesh>
-      {/* Head */}
-      <mesh
-        material={ISCHEMIA_HEAD_MAT}
-        position={[0, shaftLen + headLen / 2, 0]}
-        scale={[1, headLen, 1]}
-      >
-        <coneGeometry args={[0.003, 1, 8]} />
-      </mesh>
-    </group>
-  );
-}
-
 // ── Per-condition mean-vector arrows ──────────────────────────────────────────
 
-// Sample the mean vector direction for a condition by integrating its QRS loop
+// Compute the mean QRS vector direction for a single condition
 function conditionMeanSceneVec(conditionId: string): [number, number, number] | null {
   const preset = CONDITION_PRESETS[conditionId];
   if (!preset) return null;
-  const combined = getCombinedPathology([conditionId], {});
-  const timings = { pDuration: 80, prDuration: 80, qrsDuration: preset.timingOverrides?.qrsDuration ?? 90, stDuration: 80, tDuration: 200 };
-  const qrsStart = timings.pDuration + timings.prDuration;
+
+  // Run a temporary simulation with just this condition active
+  const sim = updateSimulation({
+    heartRateBpm: 75,
+    activeConditions: [conditionId],
+    arteries: { lad: true, d1: true, lcx: true, om: true, rca: true, pda: true },
+  });
+
+  const { qrsStart, qrsEnd } = sim.activationMap.phaseBoundaries;
   const N = 60;
   let sx = 0, sy = 0, sz = 0;
   for (let i = 0; i < N; i++) {
-    const t = qrsStart + (i / N) * timings.qrsDuration;
-    const state = getCardiacVector(t, timings, [0, 0, 0], combined.qrsSegments, combined.tWaveSegments, combined.pWaveSegments);
+    const t = qrsStart + (i / N) * (qrsEnd - qrsStart);
+    const state = getCardiacVector(t);
     const sv = vectorToScene(state.vector);
     sx += sv[0]; sy += sv[1]; sz += sv[2];
   }
@@ -326,6 +241,76 @@ export function ConditionVectors() {
       {activeConditions.map((id) => (
         <ConditionArrow key={id} conditionId={id} />
       ))}
+    </group>
+  );
+}
+
+// ── Ischemia injury-current vectors ──────────────────────────────────────────
+
+const TERRITORY_CENTERS: Record<ArteryKey, [number, number, number]> = {
+  lad: [ 0.005, -0.010,  0.040],
+  d1:  [ 0.025,  0.000,  0.032],
+  lcx: [ 0.040,  0.000,  0.000],
+  om:  [ 0.038, -0.005, -0.025],
+  rca: [ 0.000, -0.030, -0.015],
+  pda: [ 0.010, -0.040, -0.025],
+};
+
+const ISCHEMIA_ARROW_SCALE = 0.025;
+
+const ISCHEMIA_SHAFT_MAT = new MeshStandardMaterial({
+  color: '#cc0000', roughness: 0.4, metalness: 0.1, emissive: '#550000',
+});
+const ISCHEMIA_HEAD_MAT = new MeshStandardMaterial({
+  color: '#990000', roughness: 0.4, metalness: 0.1, emissive: '#440000',
+});
+
+interface IschemiaArrowProps {
+  arteryKey: ArteryKey;
+}
+
+function IschemiaArrow({ arteryKey }: IschemiaArrowProps) {
+  // For ischemia visualization, we compute the mean injury vector from the simulation
+  // by looking at the ST-segment vector
+  const { heartRateBpm, activeConditions, arteries } = useSimulationStore.getState();
+
+  // Create a temporary config with just this artery occluded
+  const testArteries = { lad: true, d1: true, lcx: true, om: true, rca: true, pda: true, [arteryKey]: false };
+  const sim = updateSimulation({ heartRateBpm, activeConditions, arteries: testArteries });
+  const { qrsEnd, tStart } = sim.activationMap.phaseBoundaries;
+
+  // Sample the ST segment to get the injury vector
+  const stMid = (qrsEnd + tStart) / 2;
+  const state = getCardiacVector(stMid);
+  const stVec = state.vector;
+
+  // Restore the actual simulation
+  updateSimulation({ heartRateBpm, activeConditions, arteries });
+
+  const center = TERRITORY_CENTERS[arteryKey];
+  const [sx, sy, sz] = vectorToScene(stVec);
+  const mag = Math.sqrt(sx * sx + sy * sy + sz * sz);
+  if (mag < 1e-6) return null;
+
+  const nx = sx / mag;
+  const ny = sy / mag;
+  const nz = sz / mag;
+
+  const arrowLen = ISCHEMIA_ARROW_SCALE;
+  const headLen = arrowLen * 0.3;
+  const shaftLen = arrowLen - headLen;
+
+  const dir = new Vector3(nx, ny, nz);
+  const helper = new ArrowHelper(dir, new Vector3(0, 0, 0), 1);
+
+  return (
+    <group position={center} quaternion={helper.quaternion}>
+      <mesh material={ISCHEMIA_SHAFT_MAT} position={[0, shaftLen / 2, 0]} scale={[1, shaftLen, 1]}>
+        <cylinderGeometry args={[0.0012, 0.0012, 1, 8]} />
+      </mesh>
+      <mesh material={ISCHEMIA_HEAD_MAT} position={[0, shaftLen + headLen / 2, 0]} scale={[1, headLen, 1]}>
+        <coneGeometry args={[0.003, 1, 8]} />
+      </mesh>
     </group>
   );
 }

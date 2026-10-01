@@ -1,26 +1,20 @@
 /**
- * pathology.ts — compound cardiac condition model.
+ * pathology.ts — Physics-based pathology model.
  *
- * Each condition modifies one or more phases of the cardiac vector:
- *   pWaveSegments  → atrial depolarization loop (LAE, RAE)
- *   qrsSegments    → ventricular depolarization loop (BBB, WPW, LVH, RVH)
- *   tWaveSegments  → ventricular repolarization loop (strain, discordance)
- *   stVector       → DC injury current during ST segment + T-wave fade (ischemia)
- *   timingOverrides → PR/QRS/QT durations
+ * Pathologies are modifications to tissue properties and conduction edges.
+ * The ECG morphology emerges from the altered propagation and dipole
+ * summation; nothing here draws a waveform.
  *
- * Multiple conditions are ADDITIVE where physics allows:
- *   - ST vectors are always summed
- *   - P-wave: LAE + RAE combine by evaluating both and summing
- *   - QRS: conduction presets dominate; hypertrophy scales amplitude
- *   - T-wave: hypertrophy strain + conduction discordance are prioritised
+ * Categories:
+ *   - conduction: block bundle branches (BBB) or add accessory pathways (WPW)
+ *   - hypertrophy: thicker, heavier ventricular walls (+ repolarisation changes)
+ *   - atrial: enlarged atria (longer, wider activation fronts)
+ *   - ischemia: artery occlusion → acute ischaemia + injury current in its territory
  */
 
-import type { Vec3, BezierSegment3D, CycleTimings } from './cardiac-vector';
-import {
-  DEFAULT_QRS_SEGMENTS,
-  T_WAVE_SEGMENTS,
-  P_WAVE_SEGMENTS,
-} from './cardiac-vector';
+import type { MyocardialSegment } from './heart-model';
+import { APD, WALL_THICKNESS, MYOCARDIAL_DENSITY, CONDUCTION_VELOCITY } from './heart-model';
+import type { ConductionSystem } from './conduction-graph';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,308 +25,290 @@ export interface ConditionPreset {
   name: string;
   category: ConditionCategory;
   description: string;
-  /** Override P-wave loop (atrial conditions) */
-  pWaveSegments?: BezierSegment3D[];
-  /** Override QRS loop (conduction / hypertrophy) */
-  qrsSegments?: BezierSegment3D[];
-  /** Override T-wave loop (strain / discordance) */
-  tWaveSegments?: BezierSegment3D[];
-  /** Additive ST injury vector */
-  stVector?: Vec3;
-  timingOverrides: Partial<CycleTimings>;
-  /** Hex color for 3D condition vector arrow */
+  /** Colour for 3D condition vector visualisation */
   vectorColor: string;
+  /** Apply this condition's modifications to elements and conduction system */
+  apply: (segments: MyocardialSegment[], conduction: ConductionSystem) => void;
 }
 
-export interface CombinedPathology {
-  pWaveSegments: BezierSegment3D[];
-  qrsSegments: BezierSegment3D[];
-  tWaveSegments: BezierSegment3D[];
-  stVector: Vec3;
-  timingOverrides: Partial<CycleTimings>;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function blockEdge(conduction: ConductionSystem, from: string, to: string): void {
+  for (const e of conduction.edges) {
+    if (e.from === from && e.to === to) e.blocked = true;
+  }
 }
 
-// ── P-wave loop variants ───────────────────────────────────────────────────────
+function addEdge(conduction: ConductionSystem, from: string, to: string, delayMs: number, accessory = false): void {
+  conduction.edges.push({ from, to, delayMs, blocked: false, accessory });
+}
 
-// LAE (Left Atrial Enlargement): broad bifid P, large late leftward+posterior forces.
-// Clinical: P duration > 120ms, bifid P in II, deep negative in V1.
-const LAE_P: BezierSegment3D[] = [
-  // Initial RA depol: rightward, inferior (normal)
-  { p0: [0,0,0],           p1: [-0.04,0.04,0.03],  p2: [-0.06,0.05,0.02],  p3: [-0.04,0.04,0.01] },
-  // Enlarged LA: large late leftward + posterior (bifid notch)
-  { p0: [-0.04,0.04,0.01], p1: [ 0.06,0.06,-0.06], p2: [ 0.18,0.08,-0.14], p3: [ 0.22,0.10,-0.16] },
-  // Return
-  { p0: [ 0.22,0.10,-0.16],p1: [ 0.14,0.05,-0.08], p2: [ 0.05,0.02,-0.02], p3: [0,0,0] },
-];
+function modifySegments(
+  segments: MyocardialSegment[],
+  filter: (s: MyocardialSegment) => boolean,
+  modify: (s: MyocardialSegment) => void,
+): void {
+  for (const s of segments) if (filter(s)) modify(s);
+}
 
-// RAE (Right Atrial Enlargement): tall peaked P, large initial rightward+inferior forces.
-// Clinical: P amplitude > 0.25 mV, peaked P in II/III/aVF (P pulmonale).
-const RAE_P: BezierSegment3D[] = [
-  // Large initial rightward+inferior RA depol (enlarged RA fires harder)
-  { p0: [0,0,0],           p1: [-0.12,0.12,0.06],  p2: [-0.20,0.20,0.05],  p3: [-0.18,0.22,0.03] },
-  // Normal small LA terminal
-  { p0: [-0.18,0.22,0.03], p1: [-0.05,0.12,0.01],  p2: [ 0.02,0.04,0.00],  p3: [0,0,0] },
-];
-
-// ── QRS loop variants ─────────────────────────────────────────────────────────
-
-// LBBB: Axis target -45° (left axis deviation).
-// Broad notched R in I/aVL/V5-V6, absent septal Q.
-// Mean vector: strongly leftward (X+), moderately superior (Y-).
-const LBBB_QRS: BezierSegment3D[] = [
-  { p0: [0,0,0],           p1: [0.08,0.00,0.04],   p2: [0.18,-0.02,0.06],  p3: [0.30,-0.05,0.06] },
-  { p0: [0.30,-0.05,0.06], p1: [0.60,-0.15,-0.05], p2: [1.00,-0.30,-0.15], p3: [1.30,-0.45,-0.25] },
-  { p0: [1.30,-0.45,-0.25],p1: [1.35,-0.60,-0.35], p2: [1.10,-0.70,-0.32], p3: [0.75,-0.65,-0.22] },
-  { p0: [0.75,-0.65,-0.22],p1: [0.40,-0.45,-0.10], p2: [0.12,-0.18,-0.04], p3: [0,0,0] },
-];
-
-// RBBB: Axis target +100° (right axis deviation).
-// RSR' in V1-V2, wide terminal S in I/V5-V6.
-// Mean vector: mildly rightward (X-), strongly inferior (Y+).
-const RBBB_QRS: BezierSegment3D[] = [
-  // Initial normal septal + early LV depol (normal initial forces)
-  { p0: [0,0,0],           p1: [-0.03,0.04,0.06],  p2: [-0.07,0.08,0.10],  p3: [-0.10,0.12,0.12] },
-  // LV free wall (leftward, inferior)
-  { p0: [-0.10,0.12,0.12], p1: [0.15,0.35,0.06],   p2: [0.50,0.60,-0.05],  p3: [0.70,0.70,-0.12] },
-  // Turning point — then delayed RV depol swings rightward + anterior
-  { p0: [0.70,0.70,-0.12], p1: [0.55,0.65,-0.18],  p2: [0.20,0.55,-0.10],  p3: [-0.10,0.50,0.10] },
-  // Terminal RV: rightward + anterior (S in I, R' in V1)
-  { p0: [-0.10,0.50,0.10], p1: [-0.35,0.45,0.25],  p2: [-0.45,0.30,0.30],  p3: [-0.40,0.20,0.25] },
-  // Return to baseline
-  { p0: [-0.40,0.20,0.25], p1: [-0.25,0.10,0.12],  p2: [-0.08,0.03,0.04],  p3: [0,0,0] },
-];
-
-// WPW Type A: Axis target ~+40° (mildly leftward + inferior).
-// Delta wave with tall R in V1-V2 (positive delta, left-sided pathway).
-// Short PR, slurred upstroke, wide QRS.
-const WPW_QRS: BezierSegment3D[] = [
-  // Delta wave: slow initial slur, leftward + inferior + anterior
-  { p0: [0,0,0],          p1: [0.08,0.08,0.08],  p2: [0.18,0.16,0.12],  p3: [0.30,0.25,0.10] },
-  // Main depol: strongly leftward + inferior
-  { p0: [0.30,0.25,0.10], p1: [0.50,0.45,0.02],  p2: [0.80,0.70,-0.10], p3: [1.00,0.80,-0.18] },
-  // Terminal
-  { p0: [1.00,0.80,-0.18],p1: [0.90,0.60,-0.25], p2: [0.55,0.30,-0.22], p3: [0.25,0.10,-0.12] },
-  { p0: [0.25,0.10,-0.12],p1: [0.10,0.02,-0.05], p2: [0.03,0.00,-0.01], p3: [0,0,0] },
-];
-
-// LVH: Axis target -15° (leftward, mildly superior = borderline LAD).
-// High amplitude leftward forces (tall R in V5-V6), deep S in V1-V2.
-// Mean vector: strongly leftward (X+), mildly superior (Y-).
-const LVH_QRS: BezierSegment3D[] = [
-  { p0: [0,0,0],           p1: [-0.03,0.02,0.06],  p2: [-0.07,0.05,0.10],  p3: [-0.10,0.08,0.12] },
-  { p0: [-0.10,0.08,0.12], p1: [0.30,0.25,0.05],   p2: [0.85,0.20,-0.10],  p3: [1.50,0.05,-0.22] },
-  { p0: [1.50,0.05,-0.22], p1: [1.60,-0.15,-0.28], p2: [1.35,-0.40,-0.28], p3: [0.80,-0.38,-0.20] },
-  { p0: [0.80,-0.38,-0.20],p1: [0.35,-0.20,-0.08], p2: [0.10,-0.06,-0.02], p3: [0,0,0] },
-];
-
-// RVH: Axis target +120° (right axis deviation).
-// Dominant R in V1, deep S in V5-V6, right axis.
-// Mean vector: rightward (X-), inferior (Y+), with Y/X ratio for 120°.
-const RVH_QRS: BezierSegment3D[] = [
-  { p0: [0,0,0],            p1: [-0.04,0.08,0.12],  p2: [-0.10,0.18,0.22],  p3: [-0.18,0.28,0.28] },
-  { p0: [-0.18,0.28,0.28],  p1: [-0.35,0.55,0.28],  p2: [-0.55,0.80,0.18],  p3: [-0.65,0.90,0.10] },
-  { p0: [-0.65,0.90,0.10],  p1: [-0.55,0.72,0.00],  p2: [-0.35,0.48,-0.08], p3: [-0.15,0.28,-0.04] },
-  { p0: [-0.15,0.28,-0.04], p1: [-0.06,0.12,-0.01], p2: [-0.02,0.04,0.00],  p3: [0,0,0] },
-];
-
-// BVH (biventricular): both ventricles hypertrophied — high voltage all leads,
-// axis near-normal or mild LAD (competing forces). Target ~+30°.
-const BVH_QRS: BezierSegment3D[] = [
-  { p0: [0,0,0],           p1: [-0.04,0.05,0.12],  p2: [-0.12,0.12,0.20],  p3: [-0.18,0.18,0.24] },
-  { p0: [-0.18,0.18,0.24], p1: [0.20,0.45,0.08],   p2: [0.70,0.70,-0.08],  p3: [1.20,0.70,-0.15] },
-  { p0: [1.20,0.70,-0.15], p1: [1.25,0.40,-0.20],  p2: [0.90,0.10,-0.18],  p3: [0.45,0.05,-0.12] },
-  { p0: [0.45,0.05,-0.12], p1: [0.15,0.00,-0.04],  p2: [0.04,0.00,0.00],   p3: [0,0,0] },
-];
-
-// ── T-wave loop variants ───────────────────────────────────────────────────────
-
-const LBBB_T: BezierSegment3D[] = [
-  { p0: [0,0,0],            p1: [-0.06,0.03,0.02],  p2: [-0.13,0.08,0.04],  p3: [-0.18,0.12,0.05] },
-  { p0: [-0.18,0.12,0.05],  p1: [-0.16,0.10,0.04],  p2: [-0.10,0.06,0.02],  p3: [0,0,0] },
-];
-
-const RBBB_T: BezierSegment3D[] = [
-  { p0: [0,0,0],           p1: [0.08,0.04,-0.04],  p2: [0.18,0.10,-0.08],  p3: [0.24,0.14,-0.10] },
-  { p0: [0.24,0.14,-0.10], p1: [0.20,0.12,-0.08],  p2: [0.12,0.06,-0.04],  p3: [0,0,0] },
-];
-
-// LVH lateral strain: T inverted in I, aVL, V5-V6 (rightward+posterior T loop)
-const LVH_T: BezierSegment3D[] = [
-  { p0: [0,0,0],            p1: [-0.05,0.02,-0.07],  p2: [-0.10,0.04,-0.15],  p3: [-0.12,0.06,-0.18] },
-  { p0: [-0.12,0.06,-0.18], p1: [-0.10,0.05,-0.14],  p2: [-0.06,0.02,-0.08],  p3: [0,0,0] },
-];
-
-// RVH right precordial strain: T inverted V1-V3 (leftward+posterior T loop)
-const RVH_T: BezierSegment3D[] = [
-  { p0: [0,0,0],           p1: [0.07,0.03,-0.07],  p2: [0.15,0.06,-0.15],  p3: [0.18,0.08,-0.20] },
-  { p0: [0.18,0.08,-0.20], p1: [0.15,0.06,-0.15],  p2: [0.08,0.03,-0.08],  p3: [0,0,0] },
-];
-
-const WPW_T: BezierSegment3D[] = [
-  { p0: [0,0,0],            p1: [-0.04,0.05,-0.03],  p2: [-0.10,0.12,-0.06], p3: [-0.14,0.18,-0.08] },
-  { p0: [-0.14,0.18,-0.08], p1: [-0.12,0.14,-0.06],  p2: [-0.06,0.07,-0.03], p3: [0,0,0] },
-];
-
-// ── Condition presets ──────────────────────────────────────────────────────────
+// ── Condition presets ─────────────────────────────────────────────────────────
 
 export const CONDITION_PRESETS: Record<string, ConditionPreset> = {
   // ── Conduction ────────────────────────────────────────────────────────────
+
   lbbb: {
-    id: 'lbbb', name: 'LBBB', category: 'conduction',
-    description: 'Left Bundle Branch Block — broad notched R in I/V5-V6, no septal Q, left axis deviation',
-    qrsSegments: LBBB_QRS,
-    tWaveSegments: LBBB_T,
-    timingOverrides: { qrsDuration: 140 },
+    id: 'lbbb',
+    name: 'LBBB',
+    category: 'conduction',
+    description: 'Left bundle branch block — LV activates late by slow cell-to-cell spread from the RV side of the septum',
     vectorColor: '#aa44ff',
+    apply(_segments, conduction) {
+      blockEdge(conduction, 'his', 'lbb');
+    },
   },
+
   rbbb: {
-    id: 'rbbb', name: 'RBBB', category: 'conduction',
-    description: 'Right Bundle Branch Block — RSR\' in V1, wide S in I/V5-V6, T inversion V1',
-    qrsSegments: RBBB_QRS,
-    tWaveSegments: RBBB_T,
-    timingOverrides: { qrsDuration: 130 },
+    id: 'rbbb',
+    name: 'RBBB',
+    category: 'conduction',
+    description: 'Right bundle branch block — RV activates late by slow cell-to-cell spread across the septum',
     vectorColor: '#4488ff',
+    apply(_segments, conduction) {
+      blockEdge(conduction, 'his', 'rbb');
+    },
   },
+
   wpw: {
-    id: 'wpw', name: 'WPW', category: 'conduction',
-    description: 'Wolff–Parkinson–White (Type A) — short PR, delta wave, wide QRS',
-    qrsSegments: WPW_QRS,
-    tWaveSegments: WPW_T,
-    timingOverrides: { prDuration: 40, qrsDuration: 130 },
+    id: 'wpw',
+    name: 'WPW',
+    category: 'conduction',
+    description: 'Wolff-Parkinson-White — left lateral accessory pathway bypasses the AV node and pre-excites the basal lateral LV',
     vectorColor: '#ff8800',
+    apply(segments, conduction) {
+      // Accessory pathway (bundle of Kent) across the left AV groove: atrial
+      // activation reaches the LA posterior wall at ~60 ms; the pathway
+      // conducts in ~45 ms, so ventricular pre-excitation begins at ~105 ms
+      // (short PR). From the insertion the wave spreads tangentially through
+      // working myocardium, away from the left AV groove toward the septum
+      // (rightward and anterior: positive delta in V1, negative in I/aVL —
+      // the "type A" pattern of a left lateral pathway), until the
+      // His-Purkinje wave takes over (fusion).
+      const insertion = segments.find((s) => s.id === 'lv-base-inflat');
+      const target = segments.find((s) => s.id === 'sept-mid-ant');
+      if (insertion && target) {
+        const d: [number, number, number] = [
+          target.position[0] - insertion.position[0],
+          target.position[1] - insertion.position[1],
+          target.position[2] - insertion.position[2],
+        ];
+        const m = Math.hypot(d[0], d[1], d[2]) || 1;
+        const pathLength = 3.0;  // cm of wall swept before the Purkinje wave takes over
+        const frontWidth = 3.0;  // cm
+        segments.push({
+          id: 'wpw-preexcitation',
+          name: 'Pre-excited basal lateral wall (accessory pathway insertion)',
+          chamber: 'lv',
+          propagation: 'tangential',
+          position: [...insertion.position] as [number, number, number],
+          direction: [d[0] / m, d[1] / m, d[2] / m],
+          mass: MYOCARDIAL_DENSITY * WALL_THICKNESS.lv * frontWidth * pathLength,
+          pathLength,
+          slowFraction: 1.0,
+          conductionVelocity: CONDUCTION_VELOCITY.ventricularMyocardial,
+          apdEntry: insertion.apdEntry,
+          apdExit: insertion.apdEntry,
+          tauUp: insertion.tauUp,
+          tauRepol: insertion.tauRepol,
+          plateauSlope: insertion.plateauSlope,
+          dispersionMs: 0,
+          coherence: 1.0,
+          dualEntry: false,
+          curvatureRadius: insertion.curvatureRadius,
+          health: 1.0,
+          ischemia: 0,
+        });
+        // The pre-excited tissue is a slice of the basal lateral wall.
+        insertion.mass = Math.max(1, insertion.mass - 4);
+      }
+      addEdge(conduction, 'la-posterior', 'wpw-preexcitation', 45, true);
+      // The pathway inserts on the EPICARDIAL side of the AV groove, so the
+      // pre-excited wall elements depolarise epi → endo (reversed transmural
+      // direction). Model them as dual-entry elements whose exit (epicardial)
+      // face is reached by the pathway; the endocardial face follows after
+      // the transmural crossing unless the Purkinje wave arrives first.
+      for (const [id, delay] of [['lv-base-inflat', 50], ['lv-base-antlat', 65]] as const) {
+        const s = segments.find((x) => x.id === id);
+        if (!s) continue;
+        s.dualEntry = true;
+        const cross = (s.pathLength * s.slowFraction) / (s.conductionVelocity * 0.1);
+        addEdge(conduction, id, `${id}:exit`, cross);
+        addEdge(conduction, `${id}:exit`, id, cross);
+        addEdge(conduction, 'la-posterior', `${id}:exit`, delay, true);
+      }
+    },
   },
 
   // ── Hypertrophy ────────────────────────────────────────────────────────────
+
   lvh: {
-    id: 'lvh', name: 'LVH', category: 'hypertrophy',
-    description: 'Left Ventricular Hypertrophy — tall R V5-V6, deep S V1-V2, lateral strain, left axis',
-    qrsSegments: LVH_QRS,
-    tWaveSegments: LVH_T,
-    timingOverrides: {},
+    id: 'lvh',
+    name: 'LVH',
+    category: 'hypertrophy',
+    description: 'Left ventricular hypertrophy — thicker, heavier LV wall; prolonged transmural crossing and epicardial APD (strain)',
     vectorColor: '#ff4444',
+    apply(segments) {
+      // Concentric LVH: wall 10 → 15 mm, mass +60%. Front area (mass/thickness)
+      // barely changes but the slow transmural crossing lengthens, so each
+      // element's dipole lasts longer and the summed voltage grows.
+      // Hypertrophied sub-epicardial cells prolong their APD more than
+      // sub-endocardial cells, reversing the transmural gradient → the
+      // repolarisation vector turns away from the thick wall (strain pattern).
+      modifySegments(segments, (s) => s.chamber === 'lv', (s) => {
+        s.pathLength *= 1.5;
+        s.mass *= 1.6;
+        s.apdExit += APD.transmuralGradient + 5;   // epi now ~5 ms longer than endo
+        s.apdEntry += 5;
+      });
+      modifySegments(segments, (s) => s.chamber === 'septum', (s) => {
+        s.pathLength *= 1.3;
+        s.mass *= 1.3;
+      });
+    },
   },
+
   rvh: {
-    id: 'rvh', name: 'RVH', category: 'hypertrophy',
-    description: 'Right Ventricular Hypertrophy — tall R V1, right axis deviation, RV strain T-wave',
-    qrsSegments: RVH_QRS,
-    tWaveSegments: RVH_T,
-    timingOverrides: {},
+    id: 'rvh',
+    name: 'RVH',
+    category: 'hypertrophy',
+    description: 'Right ventricular hypertrophy — RV wall thickens toward LV values, adding rightward/anterior forces',
     vectorColor: '#44bbff',
+    apply(segments) {
+      // RV free wall 4 → 9 mm, mass ×2.5 (pressure overload). The RV dipoles,
+      // directed right and anterior, no longer cancel inside the LV forces.
+      // RV free wall 4 → 10 mm, mass ×3 (systemic-level pressure load).
+      modifySegments(segments, (s) => s.chamber === 'rv', (s) => {
+        s.pathLength *= 2.5;
+        s.mass *= 3.0;
+        s.apdExit += 25;   // RV strain: transmural gradient reduced/reversed
+        s.apdEntry += 10;
+      });
+    },
   },
 
   // ── Atrial ────────────────────────────────────────────────────────────────
+
   lae: {
-    id: 'lae', name: 'LAE', category: 'atrial',
-    description: 'Left Atrial Enlargement — broad bifid P (P mitrale), deep negative P in V1, P > 120ms',
-    pWaveSegments: LAE_P,
-    timingOverrides: { pDuration: 130 },
+    id: 'lae',
+    name: 'LAE',
+    category: 'atrial',
+    description: 'Left atrial enlargement — longer LA activation path: broad, notched P with a deep terminal negative P in V1',
     vectorColor: '#ffcc00',
+    apply(segments, conduction) {
+      // Dilated LA: each activation front travels further (path ×1.6) and the
+      // front is wider (mass scales with both). Interatrial conduction slows.
+      modifySegments(segments, (s) => s.chamber === 'la', (s) => {
+        s.pathLength *= 1.5;
+        s.mass *= 1.5 * 1.2;
+      });
+      for (const e of conduction.edges) {
+        if (e.from === 'ra-superior' && e.to === 'la-anterior') e.delayMs += 15;
+        if (e.from === 'la-anterior') e.delayMs *= 1.3;
+      }
+    },
   },
+
   rae: {
-    id: 'rae', name: 'RAE', category: 'atrial',
-    description: 'Right Atrial Enlargement — tall peaked P in II/III/aVF (P pulmonale), P ≥ 0.25mV',
-    pWaveSegments: RAE_P,
-    timingOverrides: { pDuration: 90 },
+    id: 'rae',
+    name: 'RAE',
+    category: 'atrial',
+    description: 'Right atrial enlargement — wider RA activation fronts: tall, peaked P wave (P pulmonale)',
     vectorColor: '#00ddaa',
+    apply(segments) {
+      // Dilated/hypertrophied RA: wider fronts (front area ×1.8) over a
+      // slightly longer path; RA and LA components still overlap in time so
+      // the P grows taller rather than broader.
+      modifySegments(segments, (s) => s.chamber === 'ra', (s) => {
+        s.mass *= 1.8;
+      });
+    },
   },
 };
 
-// Legacy name kept for backward compatibility
-export const CONDUCTION_PRESETS = CONDITION_PRESETS;
+// ── Apply conditions ──────────────────────────────────────────────────────────
 
-// ── Artery occlusion ST vectors ───────────────────────────────────────────────
-
-export const ARTERY_ST_VECTORS: Record<string, Vec3> = {
-  lad: [ 0.25, -0.10,  0.50],
-  d1:  [ 0.30,  0.00,  0.35],
-  lcx: [ 0.40,  0.10, -0.20],
-  om:  [ 0.35,  0.05, -0.30],
-  rca: [-0.05,  0.50,  0.10],
-  pda: [ 0.05,  0.45, -0.10],
-};
-
-// ── Combine multiple active conditions ────────────────────────────────────────
-
-export function getCombinedPathology(
+export function applyConditions(
   activeConditions: string[],
-  arteries: Record<string, boolean>,
-): CombinedPathology {
-  const active = activeConditions
-    .map((id) => CONDITION_PRESETS[id])
-    .filter(Boolean) as ConditionPreset[];
-
-  // ── P-wave ─────────────────────────────────────────────────────────────────
-  // Atrial conditions can combine: evaluate each P-wave loop and sum the vectors.
-  // A combined P-wave Segments object is built from pre-sampled additive evaluation.
-  // For simplicity: if one atrial condition, use its loop directly.
-  // If both LAE and RAE, use a combined loop (LAE+RAE = P biatriale).
-  const atrialActive = active.filter((p) => p.category === 'atrial' && p.pWaveSegments);
-  let pWaveSegments: BezierSegment3D[] = P_WAVE_SEGMENTS;
-  if (atrialActive.length === 1) {
-    pWaveSegments = atrialActive[0]!.pWaveSegments!;
-  } else if (atrialActive.length >= 2) {
-    // Combine by creating offset control points (LAE + RAE vectors summed)
-    // Use LAE as the base (more complex shape) and add RAE's initial amplitude
-    pWaveSegments = LAE_P.map((seg, i) => {
-      const rae = RAE_P[i] ?? RAE_P[RAE_P.length - 1]!;
-      return {
-        p0: addVec(seg.p0, rae.p0),
-        p1: addVec(seg.p1, rae.p1),
-        p2: addVec(seg.p2, rae.p2),
-        p3: addVec(seg.p3, rae.p3),
-      } satisfies BezierSegment3D;
-    });
+  segments: MyocardialSegment[],
+  conduction: ConductionSystem,
+): void {
+  for (const id of activeConditions) {
+    const preset = CONDITION_PRESETS[id];
+    if (preset) preset.apply(segments, conduction);
   }
-
-  // ── QRS ────────────────────────────────────────────────────────────────────
-  // Conduction presets (BBB, WPW) dominate QRS shape — use first found.
-  // Hypertrophy (LVH, RVH) can combine: if both, use BVH; else use the one found.
-  const conductionPreset = active.find((p) => p.category === 'conduction' && p.qrsSegments);
-  const hypertrophyActive = active.filter((p) => p.category === 'hypertrophy' && p.qrsSegments);
-
-  let qrsSegments: BezierSegment3D[] = DEFAULT_QRS_SEGMENTS;
-  if (conductionPreset?.qrsSegments) {
-    qrsSegments = conductionPreset.qrsSegments;
-  } else if (hypertrophyActive.length >= 2) {
-    qrsSegments = BVH_QRS;
-  } else if (hypertrophyActive.length === 1) {
-    qrsSegments = hypertrophyActive[0]!.qrsSegments!;
-  }
-
-  // ── T-wave ─────────────────────────────────────────────────────────────────
-  // Priority: conduction preset > hypertrophy > default
-  const tWaveSource =
-    active.find((p) => p.category === 'conduction' && p.tWaveSegments) ??
-    active.find((p) => p.category === 'hypertrophy' && p.tWaveSegments);
-  const tWaveSegments: BezierSegment3D[] = tWaveSource?.tWaveSegments ?? T_WAVE_SEGMENTS;
-
-  // ── ST vector (additive) ───────────────────────────────────────────────────
-  const st: Vec3 = [0, 0, 0];
-  for (const preset of active) {
-    if (preset.stVector) {
-      st[0] += preset.stVector[0];
-      st[1] += preset.stVector[1];
-      st[2] += preset.stVector[2];
-    }
-  }
-  for (const [key, patent] of Object.entries(arteries)) {
-    if (!patent && ARTERY_ST_VECTORS[key]) {
-      const v = ARTERY_ST_VECTORS[key]!;
-      st[0] += v[0]; st[1] += v[1]; st[2] += v[2];
-    }
-  }
-
-  // ── Timing (merge, later conditions override earlier) ─────────────────────
-  const timingOverrides: Partial<CycleTimings> = {};
-  for (const preset of active) {
-    Object.assign(timingOverrides, preset.timingOverrides);
-  }
-
-  return { pWaveSegments, qrsSegments, tWaveSegments, stVector: st, timingOverrides };
 }
 
-function addVec(a: Vec3, b: Vec3): Vec3 {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+// ── Artery occlusion / ischaemia ──────────────────────────────────────────────
+
+/** Which element IDs are perfused by each coronary artery */
+export const ARTERY_TERRITORY: Record<string, string[]> = {
+  // Left anterior descending: anterior wall, anterior 2/3 of septum, apex
+  lad: [
+    'sept-base-ant', 'sept-mid-ant', 'sept-apical', 'sept-rv-face',
+    'lv-base-ant', 'lv-mid-ant', 'lv-apical-ant', 'lv-apex', 'lv-apical-lat',
+  ],
+  // First diagonal: basal/mid anterior and anterolateral
+  d1: ['lv-base-ant', 'lv-mid-ant', 'lv-base-antlat'],
+  // Left circumflex: lateral and inferolateral walls
+  lcx: [
+    'lv-base-antlat', 'lv-mid-antlat', 'lv-base-inflat', 'lv-mid-inflat', 'lv-apical-lat',
+  ],
+  // Obtuse marginal: mid/apical lateral
+  om: ['lv-mid-antlat', 'lv-mid-inflat', 'lv-apical-lat'],
+  // Right coronary: RV free wall, inferior LV, inferior septum (via PDA)
+  rca: [
+    'rv-outflow', 'rv-ant-base', 'rv-ant-mid', 'rv-lateral', 'rv-inferior', 'rv-apex',
+    'lv-base-inf', 'lv-mid-inf', 'lv-apical-inf', 'lv-base-inflat',
+    'sept-base-inf', 'sept-mid-inf',
+  ],
+  // Posterior descending: inferior septum and inferior wall
+  pda: ['sept-base-inf', 'sept-mid-inf', 'lv-base-inf', 'lv-mid-inf', 'lv-apical-inf'],
+};
+
+/** Severity of acute transmural ischaemia applied to an occluded territory (0..1). */
+export const OCCLUSION_ISCHEMIA_SEVERITY = 1.0;
+/** Fraction of excitable tissue remaining in acutely ischaemic myocardium. */
+export const OCCLUSION_HEALTH = 0.8;
+
+/**
+ * Apply acute ischaemia to elements in the territories of occluded arteries.
+ * `arteries[key] === false` means occluded.
+ */
+export function applyIschemia(
+  arteries: Record<string, boolean>,
+  segments: MyocardialSegment[],
+): void {
+  for (const [arteryKey, isPatent] of Object.entries(arteries)) {
+    if (isPatent) continue;
+    const territory = ARTERY_TERRITORY[arteryKey];
+    if (!territory) continue;
+    const set = new Set(territory);
+    for (const seg of segments) {
+      if (!set.has(seg.id)) continue;
+      seg.ischemia = Math.max(seg.ischemia, OCCLUSION_ISCHEMIA_SEVERITY);
+      seg.health = Math.min(seg.health, OCCLUSION_HEALTH);
+    }
+  }
+}
+
+/** Centroid (Frank cm) of an artery's territory — for 3D visualisation. */
+export function territoryCentroid(arteryKey: string, segments: MyocardialSegment[]): [number, number, number] | null {
+  const ids = new Set(ARTERY_TERRITORY[arteryKey] ?? []);
+  let n = 0, x = 0, y = 0, z = 0;
+  for (const s of segments) {
+    if (!ids.has(s.id)) continue;
+    n++; x += s.position[0]; y += s.position[1]; z += s.position[2];
+  }
+  return n ? [x / n, y / n, z / n] : null;
 }
 
 export const PATHOLOGY_PRESETS = CONDITION_PRESETS;

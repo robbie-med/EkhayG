@@ -8,4 +8,7 @@ export default defineConfig(({ mode }) => ({
     react(),
     tailwindcss(),
   ],
+  // Port 3919 is registered for this project in /home/user/Projects/PORTS.md.
+  server: { host: '127.0.0.1', port: 3919, strictPort: true },
+  preview: { host: '127.0.0.1', port: 3919, strictPort: true },
 }))

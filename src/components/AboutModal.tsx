@@ -30,14 +30,6 @@ function Code({ children }: { children: string }) {
   );
 }
 
-function Highlight({ children }: { children: string }) {
-  return (
-    <span style={{ color: 'var(--xp-text-label)', fontWeight: 'bold', fontFamily: 'Consolas, monospace' }}>
-      {children}
-    </span>
-  );
-}
-
 function H2({ children }: { children: string }) {
   return (
     <h2 style={{
@@ -102,54 +94,75 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
 function DipoleTab() {
   return (
     <div>
-      <H2>The Cardiac Dipole Model</H2>
+      <H2>Myocardial Wall Elements</H2>
       <P>
-        Every cell in the heart generates a tiny electrical dipole as it depolarizes.
-        The simulator treats the <em>entire heart</em> as a single time-varying 3D dipole —
-        the <strong>vectorcardiographic (VCG) model</strong> first described by Ernest Frank (1956).
-      </P>
-      <P>
-        At any instant <Highlight>t</Highlight>, the cardiac vector is:
-      </P>
-      <Code>{`V(t) = [ Vx(t), Vy(t), Vz(t) ]   (units: millivolts)`}</Code>
-      <P>
-        This vector traces a closed 3D loop over one cardiac cycle. The loop has three
-        distinct sections corresponding to the P wave, QRS complex, and T wave.
+        The heart is modelled as ~30 wall elements: the left ventricle as a truncated
+        ellipsoid divided into the AHA 17-segment sectors, a right ventricular free wall,
+        and six atrial patches. Each element has an anatomical mass, wall thickness,
+        conduction velocity and action-potential durations at its two faces. Nothing is
+        drawn: every lead is the projection of the summed element dipoles.
       </P>
 
-      <H2>Piecewise Cubic Bézier Curves</H2>
+      <H2>The 1-D Cable Identity (Uniform Double Layer)</H2>
       <P>
-        Each section of the loop is modeled as a chain of cubic Bézier segments.
-        Each segment is defined by four 3D control points and is evaluated as:
+        An activation front is a dipole layer whose dipole points in the direction of
+        propagation. For a ventricular wall element the front enters at the endocardium
+        and exits at the epicardium, so the dipole lies along the <em>outward wall normal</em>,
+        which is computed from the chamber geometry. For a slab of cross-section A the
+        far-field dipole is exactly:
       </P>
-      <Code>{`// cardiac-vector.ts — evaluateBezier()
-V(t) = (1-t)³·p0 + 3(1-t)²t·p1 + 3(1-t)t²·p2 + t³·p3
+      <Code>{`p(t) = GAIN · A · [ Vm(entry, t) − Vm(exit, t) ] · n̂
 
-// For example, the main QRS free-wall segment (Phase 2a):
-{
-  p0: [ 0.00,  0.00,  0.00],   // starts at origin (QRS onset)
-  p1: [-0.03,  0.01,  0.06],   // septal direction: rightward, anterior
-  p2: [-0.07,  0.02,  0.10],
-  p3: [-0.10,  0.03,  0.12],   // initial rightward peak (q wave)
-}
-{
-  p0: [-0.10,  0.03,  0.12],
-  p1: [ 0.15,  0.20,  0.10],   // curve leftward (LV dominates)
-  p2: [ 0.60,  0.50,  0.00],
-  p3: [ 1.00,  0.70, -0.15],   // QRS peak: leftward, inferior, slightly posterior
-}`}</Code>
+A        = mass / (density · path length)      front cross-section
+Vm(entry) = action potential started when the Purkinje wave arrives
+Vm(exit)  = action potential started one transmural crossing later
+            (10 mm at 0.33 m/s ≈ 21 ms), with a shorter APD`}</Code>
       <P>
-        A <strong>smoothstep</strong> easing function is applied to the normalized
-        phase time so that the vector accelerates smoothly into and out of each wave,
-        avoiding artificial sharp corners in the waveform.
+        This single expression produces the whole beat: the <strong>QRS</strong> while the
+        entry face is depolarised and the exit face is not; an <strong>isoelectric ST</strong>
+        while both faces sit at the plateau; and the <strong>T wave</strong> when the
+        epicardial face repolarises first because its action potential is ~45 ms shorter
+        than the endocardial one — more than the crossing delay, so the T wave is
+        concordant with the QRS for a physical reason, not by a sign convention.
       </P>
 
-      <H2>The ST Segment</H2>
+      <H2>Action Potential</H2>
+      <Code>{`Vm(τ) = up(τ) · [1 − down(τ − APD)] · decline(τ)
+
+up      = logistic(τ / 3 ms)          phase 0 (activation dispersion across a face)
+down    = logistic((τ − APD) / 10 ms)  phase 3
+decline = 1 − 0.2 · τ / 300 ms         phase 2 slope
+APD(RR) = APD₈₀₀ · (RR / 800 ms)^0.5   rate adaptation (Bazett-type)`}</Code>
+
+      <H2>The Septum</H2>
       <P>
-        During the ST segment the cardiac vector is normally at the origin (isoelectric).
-        In ischemia, injured myocytes maintain a <em>DC injury current</em> that shifts
-        the baseline — modeled as an additive <Highlight>stVector</Highlight> applied
-        during the ST segment, ramped in/out with smoothstep to avoid a square-wave artifact.
+        Septal elements are full-thickness cables fed from both sides: the left bundle
+        activates the LV face, the right bundle the RV face ~8 ms later. Their dipole
+        A·(Vm_LV − Vm_RV) is rightward only during that short window — the normal septal
+        q wave in I, aVL, V5–V6 and the r wave in V1 — and vanishes once both faces are
+        depolarised. The basal septum is reached from the RV side first, producing the
+        terminal leftward-posterior forces.
+      </P>
+
+      <H2>Activation Sequence</H2>
+      <P>
+        Activation times come from a shortest-path solve over a conduction graph —
+        SA node → atria → AV node → His → bundle branches → fascicles → Purkinje → endocardium
+        — with Purkinje breakthrough times taken from Durrer's 1970 isolated-heart maps.
+        Neighbouring wall elements are also joined by slow cell-to-cell edges generated
+        from their geometry, which take over when a bundle branch is blocked.
+      </P>
+
+      <H2>Injury Current</H2>
+      <P>
+        Acutely ischaemic tissue has an elevated resting potential and a lower, shorter
+        plateau. The potential difference against healthy tissue drives current across
+        the border of the ischaemic zone; for a transmural zone of area S on a wall of
+        thickness h and curvature radius R the dipole is (2h/R)·S·ΔVm along the outward
+        normal (the solid-angle theory of ST shifts). It points away from the zone in
+        diastole (TQ depression) and toward it during the plateau (ST elevation); both
+        appear as ST elevation once the trace is referenced to the TP baseline, exactly
+        as an AC-coupled electrocardiograph does.
       </P>
     </div>
   );
@@ -174,16 +187,15 @@ where L̂ is the unit vector from the negative to positive electrode.`}</Code>
       </P>
       <Code>{`Lead III = Lead II − Lead I      (always, by construction)`}</Code>
 
-      <H2>Standard Electrode Positions (Frank coords)</H2>
-      <Code>{`// Limb electrodes (on torso surface)
-RA: [-0.50, -0.30, 0.00]   // Right Arm: rightward, superior
-LA: [ 0.50, -0.30, 0.00]   // Left Arm:  leftward, superior
-LL: [ 0.10,  0.70, 0.00]   // Left Leg:  inferior
+      <H2>Standard Electrode Positions (cm from the heart centre)</H2>
+      <Code>{`// Torso half-width 16 cm, half-depth 11 cm; ventricular mass centre
+// 1.5 cm left of midline, 2.5 cm anterior of the mid-coronal plane.
+V1: [ -4.0, -3.0,  8.4]   V4: [  8.0,  0.0,  6.4]
+V2: [  1.0, -3.0,  8.4]   V5: [ 11.5,  0.0,  3.9]
+V3: [  4.5, -1.5,  7.7]   V6: [ 14.5,  0.0, -2.5]   // mid-axillary: slightly posterior
 
-// Precordial V1-V6 (anterior chest)
-V1: [-0.35,  0.10, 0.50]   V4: [ 0.25,  0.30, 0.55]
-V2: [-0.15,  0.15, 0.55]   V5: [ 0.45,  0.30, 0.45]
-V3: [ 0.05,  0.22, 0.60]   V6: [ 0.60,  0.30, 0.25]`}</Code>
+// Precordial lead vector = unit(electrode − heart centre), scaled by
+// the proximity factor d(V4)/d(Vn).`}</Code>
 
       <H2>Limb Lead Vectors</H2>
       <Code>{`I   = LA − RA         (left − right arm)
@@ -211,89 +223,48 @@ V_custom = custom_position − WCT`}</Code>
 function PathologyTab() {
   return (
     <div>
-      <H2>How Pathology Modifies the Vector Loop</H2>
+      <H2>How Pathology Changes the Tracing</H2>
       <P>
-        The simulator never stores pre-recorded waveforms. Instead, each pathology
-        directly modifies the parameters of the 3D cardiac dipole. All 12 leads update
-        simultaneously because they all derive from the same modified vector.
+        The simulator never stores waveforms. Every condition is a change to tissue
+        properties or to the conduction graph, and the 12 leads follow from the physics.
       </P>
 
-      <H2>Artery Occlusion → ST Injury Vector</H2>
-      <P>
-        Ischemic myocytes sustain a persistent depolarization (injury current).
-        This is modeled as an additive vector during the ST segment,
-        pointing <em>toward</em> the ischemic zone:
-      </P>
-      <Code>{`// pathology.ts — ARTERY_ST_VECTORS
-LAD occlusion: stVector = [ 0.25, -0.10,  0.50]
-  → Anterior (Z+), slightly superior (Y-), leftward (X+)
-  → Produces STE in V1–V4, reciprocal STD in II/III/aVF
+      <H2>Artery Occlusion → Ischaemia</H2>
+      <Code>{`occluded territory elements:
+  ischemia = 1      → resting potential +20 mV, plateau −15 %, APD × 0.85,
+                      slower upstroke; injury dipole along the wall normal
+  health   = 0.8    → reduced excitable mass
 
-RCA occlusion: stVector = [-0.05,  0.50,  0.10]
-  → Inferior (Y+) dominant
-  → Produces STE in II, III, aVF; reciprocal STD in I/aVL
+LAD  anterior wall, anterior 2/3 septum, apex   → STE V1–V4, reciprocal II/III/aVF
+RCA  RV free wall, inferior wall, inferior septum → STE III > II, aVF; STD I, aVL; STE V1
+LCx  lateral / inferolateral walls              → STE I, aVL, V5–V6; STD V1–V2`}</Code>
 
-LCx occlusion: stVector = [ 0.40,  0.10, -0.20]
-  → Lateral (X+) and slightly posterior (Z-)
-  → Produces STE in I, aVL, V5–V6
+      <H2>Bundle Branch Block</H2>
+      <Code>{`LBBB: edge his → lbb blocked.  The LV is reached across the septum from the
+      RV side (RV face first → reversed septal vector, no septal q), then by
+      cell-to-cell spread ring by ring.  QRS ≈ 150 ms, discordant ST–T.
+RBBB: edge his → rbb blocked.  LV activates normally; the RV and the RV face
+      of the septum are reached late across the wall → terminal rightward
+      anterior forces: R' in V1, wide S in I and V6.`}</Code>
 
-// Multiple arteries occluded: vectors are summed
-combined_st = preset.stVector + Σ(occluded artery vectors)`}</Code>
+      <H2>Pre-excitation (WPW)</H2>
+      <Code>{`Accessory pathway from the LA posterior wall to the epicardial side of the
+basal lateral LV (≈ 45 ms after the atrium is reached).  The pre-excited wall
+depolarises epicardium → endocardium and spreads tangentially toward the
+septum: short PR, delta wave positive in V1 and negative in I/aVL (type A),
+fusion with the His-Purkinje wavefront.`}</Code>
 
-      <H2>Bundle Branch Block → New QRS Loop Shape</H2>
-      <P>
-        In BBB, the normal conduction sequence is disrupted. The entire QRS loop
-        is replaced with a new Bézier path reflecting the altered depolarization wavefront:
-      </P>
-      <Code>{`// LBBB: LBB blocked → septum depolarizes right→left (reversed)
-//   No initial rightward deflection (no septal Q in I/V6)
-//   Broad, slurred R in I, aVL, V5-V6
-//   Terminal forces superior → LEFT AXIS DEVIATION
-//   Mean axis: ~ −50°
+      <H2>Hypertrophy</H2>
+      <Code>{`LVH: LV wall 10 → 15 mm, mass +60 %.  Longer transmural crossing →
+     larger summed voltage; sub-epicardial APD prolonged beyond the
+     endocardial APD → repolarisation reversed → lateral strain T inversion.
+RVH: RV wall 4 → 10 mm, mass ×3 → rightward/anterior forces no longer
+     cancelled: tall R in V1, rightward axis shift.`}</Code>
 
-// RBBB: RBB blocked → LV depolarizes normally, then RV late
-//   Normal initial QRS (septal Q preserved)
-//   Terminal forces rightward + anterior → RSR' in V1
-//   Axis: usually normal`}</Code>
-
-      <H2>Hypertrophy → Amplified + Redirected Loop</H2>
-      <Code>{`// LVH: massive LV → high-amplitude leftward forces
-//   Dominant main vector: leftward (X+ up to 1.7 mV)
-//   Terminal forces turn SUPERIOR (left axis deviation ~−35°)
-//   Produces tall R in V5-V6, deep S in V1-V2 (Sokolow-Lyon)
-//   Lateral ST strain (negative stVector in lateral leads)
-
-// RVH: RV dominates over LV
-//   Main vector: RIGHTWARD (X− up to −1.1 mV) + anterior
-//   Mean axis: ~+120° (right axis deviation)
-//   Produces tall R in V1, deep S in V5-V6, right axis`}</Code>
-
-      <H2>getCombinedPathology()</H2>
-      <P>
-        At every render frame, this function merges the conduction preset with any
-        occluded arteries into a single parameter set:
-      </P>
-      <Code>{`function getCombinedPathology(conductionId, arteries) {
-  const preset = CONDUCTION_PRESETS[conductionId];
-
-  // Start with preset's secondary ST vector (e.g. LBBB discordance)
-  const st = [...preset.stVector];
-
-  // Additively layer each occluded artery's injury vector
-  for (const [artery, patent] of Object.entries(arteries)) {
-    if (!patent) {
-      st[0] += ARTERY_ST_VECTORS[artery][0];
-      st[1] += ARTERY_ST_VECTORS[artery][1];
-      st[2] += ARTERY_ST_VECTORS[artery][2];
-    }
-  }
-
-  return {
-    qrsSegments: preset.qrsSegments,   // loop shape
-    stVector: st,                       // injury current
-    timingOverrides: preset.timingOverrides,  // PR, QRS duration
-  };
-}`}</Code>
+      <H2>Atrial Enlargement</H2>
+      <Code>{`LAE: LA path length ×1.5, slower interatrial conduction → broad,
+     notched P with a late terminal negative P in V1.
+RAE: RA front area ×1.8 → tall, peaked P in II (P pulmonale).`}</Code>
     </div>
   );
 }
@@ -372,13 +343,13 @@ Left axis deviation:   −30° to  −90°   (LBBB, LVH, inferior MI)
 Right axis deviation:  +90° to +180°   (RVH, RBBB, lateral MI)
 Extreme axis:         −90° to +180°   (rare, ventricular rhythms)`}</Code>
 
-      <H2>Expected Axes by Condition</H2>
-      <Code>{`Normal sinus rhythm:    ~+45°  (leftward + inferior)
-LBBB:                  ~−50°  (left axis — terminal superior forces)
-RBBB:                  ~+40°  (normal axis — LV dominates until late)
-LVH:                   ~−35°  (mild left axis — high-amp + superior terminal)
-RVH:                   ~+120° (right axis — RV dominates, rightward mean)
-WPW (Type A):          ~+55°  (near-normal — pathway slightly alters initial)`}</Code>
+      <H2>Axes Produced by the Model</H2>
+      <Code>{`Normal sinus rhythm:   ~+15°  (horizontal-intermediate heart)
+LBBB:                  ~−10°  (terminal superior forces)
+RBBB:                  ~+70°
+LVH:                   ~+15°  with lateral strain
+RVH:                   ~+25°  (modest rightward shift; tall R in V1)
+WPW (left lateral):    ~+25°`}</Code>
 
       <H2>VCG Loop Visualization</H2>
       <P>

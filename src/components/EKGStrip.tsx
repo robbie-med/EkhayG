@@ -3,42 +3,43 @@
  * Single-lead EKG tracing on an HTML5 Canvas.
  * Scrolling strip — new data appears at right, scrolls left.
  *
- * EKG paper standards (from TECHNICAL_SPEC.md):
- *   - Small square: 1mm × 1mm = 0.04s × 0.1mV
- *   - Large square: 5mm × 5mm = 0.20s × 0.5mV
- *   - Standard speed: 25mm/s  → 1px = 1mm at CSS pixel density 1
- *   - Standard gain:  10mm/mV
- *   - Grid color: #FFB3B3 (light pink/red)
- *   - Background: #FFF5F5
+ * EKG paper standards:
+ *   - Small square: 1mm × 1mm = 0.04s × 0.1mV (at 25 mm/s, 10 mm/mV)
+ *   - Large square: 5mm × 5mm
+ *
+ * Sampling: the engine supplies the waveform at 1 ms resolution; each pixel
+ * column stores the first / min / max / last sample of the simulated time it
+ * covers, so narrow deflections keep their full amplitude at any frame rate.
  */
 
 import { useRef, useEffect, useCallback } from 'react';
-import { getCardiacVector, getDefaultTimings } from '../engine/cardiac-vector';
 import type { Vec3 } from '../engine/cardiac-vector';
-import { computeLeadVoltage, computeLeadVectors, ELECTRODE_POSITIONS } from '../engine/lead-calculator';
-import { getCombinedPathology } from '../engine/pathology';
+import { PRECORDIAL_SCALE, STANDARD_LEAD_VECTORS } from '../engine/lead-calculator';
+import { getSimulationState, projectLead, sampleWave, updateSimulation } from '../engine/simulation-cache';
+import type { SimulationState } from '../engine/simulation-cache';
 import { useSimulationStore } from '../store/simulation-store';
 import type { LeadName } from '../engine/lead-calculator';
 
-// ── EKG paper constants (all in canvas pixels — 1px = 1mm) ─────────────────
-const SMALL_SQ_PX = 4;   // 1mm at display density — scale up so it's visible on screen
-const LARGE_SQ_PX = SMALL_SQ_PX * 5; // 5 small = 1 large square
-
-// 10mm/mV default gain
-const PX_PER_MV_BASE = 10 * SMALL_SQ_PX;
+// ── EKG paper constants (CSS px) ─────────────────────────────────────────────
+const SMALL_SQ_PX = 4;   // 1 mm
+const LARGE_SQ_PX = SMALL_SQ_PX * 5;
+const PX_PER_MV_BASE = 10 * SMALL_SQ_PX;   // 10 mm/mV
 
 interface Props {
   leadName: LeadName;
-  /** Canvas width in px */
   width?: number;
-  /** Canvas height in px */
   height?: number;
-  /** Optional label override */
   label?: string;
-  /** Show grid and label (default true) */
   showGrid?: boolean;
   /** Override lead vector for custom electrode placement (Frank coords). */
   customLeadVector?: Vec3;
+  /** Electrode position in Frank coords (cm) for arbitrary lead placement. */
+  customElectrodePosition?: Vec3;
+}
+
+function unit(v: Vec3): Vec3 {
+  const m = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / m, v[1] / m, v[2] / m];
 }
 
 export function EKGStrip({
@@ -48,62 +49,49 @@ export function EKGStrip({
   label,
   showGrid = true,
   customLeadVector,
+  customElectrodePosition,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bufferRef = useRef<number[]>([]);   // ring buffer of voltage samples
+  const colsRef = useRef<Float32Array>(new Float32Array(0));  // 4 values per column
+  const headRef = useRef(0);
+  const simTimeRef = useRef(0);
+  const pxAccRef = useRef(0);
   const lastTimeRef = useRef<number | null>(null);
-  const cycleTimeMsRef = useRef(0);
   const rafRef = useRef<number>(0);
   const customVecRef = useRef(customLeadVector);
   customVecRef.current = customLeadVector;
+  const customPosRef = useRef(customElectrodePosition);
+  customPosRef.current = customElectrodePosition;
+  const waveRef = useRef<{ key: string; sim: SimulationState | null; wave: Float32Array | null }>({ key: '', sim: null, wave: null });
 
-  const {
-    heartRateBpm,
-    activeConditions,
-    arteries,
-    playbackSpeed,
-    gain,
-    paperSpeed,
-  } = useSimulationStore();
-
-  const leadVectors = computeLeadVectors(ELECTRODE_POSITIONS);
+  const { heartRateBpm, activeConditions, arteries, playbackSpeed, gain, paperSpeed } = useSimulationStore();
 
   const drawGrid = useCallback((ctx: CanvasRenderingContext2D, w: number, h: number) => {
     ctx.fillStyle = '#FFF5F5';
     ctx.fillRect(0, 0, w, h);
-
-    // Light pink small squares
     ctx.strokeStyle = '#FFB3B3';
     ctx.lineWidth = 0.5;
-    for (let x = 0; x <= w; x += SMALL_SQ_PX) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= h; y += SMALL_SQ_PX) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    // Darker pink large squares
+    for (let x = 0; x <= w; x += SMALL_SQ_PX) { ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); ctx.stroke(); }
+    for (let y = 0; y <= h; y += SMALL_SQ_PX) { ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke(); }
     ctx.strokeStyle = '#FF8888';
     ctx.lineWidth = 0.8;
-    for (let x = 0; x <= w; x += LARGE_SQ_PX) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= h; y += LARGE_SQ_PX) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
+    for (let x = 0; x <= w; x += LARGE_SQ_PX) { ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); ctx.stroke(); }
+    for (let y = 0; y <= h; y += LARGE_SQ_PX) { ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke(); }
   }, []);
+
+  /** Waveform (1 ms samples, one cycle) for the current lead / custom electrode. */
+  const getWave = useCallback((sim: SimulationState): Float32Array => {
+    const cv = customVecRef.current, cp = customPosRef.current;
+    const key = cp ? `pos:${cp.join(',')}` : cv ? `vec:${cv.join(',')}` : `lead:${leadName}`;
+    const cached = waveRef.current;
+    if (cached.sim === sim && cached.key === key && cached.wave) return cached.wave;
+    let wave: Float32Array;
+    if (cp) wave = projectLead(sim, unit(cp), 1);
+    else if (cv) wave = projectLead(sim, unit(cv), 1);
+    else wave = projectLead(sim, STANDARD_LEAD_VECTORS[leadName], PRECORDIAL_SCALE[leadName] ?? 1);
+    waveRef.current = { key, sim, wave };
+    return wave;
+  }, [leadName]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -111,84 +99,69 @@ export function EKGStrip({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const combined = getCombinedPathology(activeConditions, arteries);
-    const timings = {
-      ...getDefaultTimings(heartRateBpm),
-      ...combined.timingOverrides,
-    };
-    const cycleLen = 60000 / heartRateBpm;
-    const pxPerMv = PX_PER_MV_BASE * (gain / 10);
-    const pxPerMs = (paperSpeed * SMALL_SQ_PX) / 1000 * playbackSpeed;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
 
-    // Initialize buffer to fill canvas width
-    if (bufferRef.current.length === 0) {
-      bufferRef.current = new Array(width).fill(0);
-    }
+    updateSimulation({ heartRateBpm, activeConditions, arteries });
+    const pxPerMv = PX_PER_MV_BASE * (gain / 10);
+    const pxPerSimMs = (paperSpeed * SMALL_SQ_PX) / 1000;
+    const msPerPx = 1 / pxPerSimMs;
+    const nCols = width;
+    if (colsRef.current.length !== nCols * 4) { colsRef.current = new Float32Array(nCols * 4); headRef.current = 0; }
 
     const animate = (timestamp: number) => {
       if (lastTimeRef.current === null) lastTimeRef.current = timestamp;
-      const dtMs = (timestamp - lastTimeRef.current);
+      const dtReal = Math.min(100, timestamp - lastTimeRef.current);
       lastTimeRef.current = timestamp;
 
-      // Advance cycle time
-      cycleTimeMsRef.current = (cycleTimeMsRef.current + dtMs * playbackSpeed) % cycleLen;
+      const sim = getSimulationState();
+      const wave = getWave(sim);
+      const cols = colsRef.current;
 
-      // How many pixels to advance this frame
-      const pxAdvance = dtMs * pxPerMs;
-
-      // Sample voltage at current cycle time
-      const state = getCardiacVector(
-        cycleTimeMsRef.current,
-        timings,
-        combined.stVector,
-        combined.qrsSegments,
-        combined.tWaveSegments,
-        combined.pWaveSegments,
-      );
-      const lv = customVecRef.current ?? leadVectors[leadName];
-      const voltage = computeLeadVoltage(state.vector, lv);
-
-      // Push new sample(s) — for smooth scrolling push fractional px
-      // We push one sample per frame; the scroll handles sub-pixel timing
-      const buf = bufferRef.current;
-      // Shift left by pxAdvance, fill rightmost with new voltage
-      // Simple approach: push one sample per frame
-      const samplesToAdd = Math.max(1, Math.round(pxAdvance));
-      for (let i = 0; i < samplesToAdd; i++) {
-        buf.push(voltage);
-      }
-      // Keep buffer at width samples
-      if (buf.length > width) {
-        buf.splice(0, buf.length - width);
+      pxAccRef.current += dtReal * playbackSpeed * pxPerSimMs;
+      while (pxAccRef.current >= 1) {
+        const t0 = simTimeRef.current;
+        const n = Math.max(1, Math.round(msPerPx));
+        const first = sampleWave(wave, t0);
+        let lo = first, hi = first, loT = 0, hiT = 0, last = first;
+        for (let k = 1; k < n; k++) {
+          const v = sampleWave(wave, t0 + k);
+          if (v < lo) { lo = v; loT = k; }
+          if (v > hi) { hi = v; hiT = k; }
+          last = v;
+        }
+        const o = headRef.current * 4;
+        cols[o] = first; cols[o + 1] = loT <= hiT ? lo : hi; cols[o + 2] = loT <= hiT ? hi : lo; cols[o + 3] = last;
+        headRef.current = (headRef.current + 1) % nCols;
+        simTimeRef.current = t0 + msPerPx;
+        pxAccRef.current -= 1;
       }
 
       // ── Draw ──────────────────────────────────────────────────────────────
-      if (showGrid) {
-        drawGrid(ctx, width, height);
-      } else {
-        ctx.fillStyle = '#FFF5F5';
-        ctx.fillRect(0, 0, width, height);
-      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (showGrid) drawGrid(ctx, width, height);
+      else { ctx.fillStyle = '#FFF5F5'; ctx.fillRect(0, 0, width, height); }
 
-      // Baseline is middle of canvas
       const baseline = height / 2;
-
-      // Draw tracing
       ctx.beginPath();
       ctx.strokeStyle = '#1a1a1a';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.25;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
-
-      for (let x = 0; x < buf.length; x++) {
-        const v = buf[x];
-        const y = baseline - v * pxPerMv;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      for (let i = 0; i < nCols; i++) {
+        const o = ((headRef.current + i) % nCols) * 4;
+        const x = i + 0.5;
+        const y0 = baseline - cols[o] * pxPerMv;
+        if (i === 0) ctx.moveTo(x, y0); else ctx.lineTo(x, y0);
+        ctx.lineTo(x, baseline - cols[o + 1] * pxPerMv);
+        ctx.lineTo(x, baseline - cols[o + 2] * pxPerMv);
+        ctx.lineTo(x, baseline - cols[o + 3] * pxPerMv);
       }
       ctx.stroke();
 
-      // Lead label
       if (showGrid) {
         ctx.fillStyle = '#333333';
         ctx.font = `bold ${LARGE_SQ_PX * 0.7}px monospace`;
@@ -206,13 +179,15 @@ export function EKGStrip({
   }, [
     leadName, width, height, showGrid, label,
     heartRateBpm, activeConditions, arteries, playbackSpeed, gain, paperSpeed,
-    drawGrid, leadVectors,
+    drawGrid, getWave,
   ]);
 
   // Reset buffer when parameters change
   useEffect(() => {
-    bufferRef.current = [];
-    cycleTimeMsRef.current = 0;
+    colsRef.current.fill(0);
+    headRef.current = 0;
+    simTimeRef.current = 0;
+    pxAccRef.current = 0;
   }, [heartRateBpm, activeConditions, arteries, playbackSpeed, gain, paperSpeed]);
 
   return (
@@ -220,7 +195,7 @@ export function EKGStrip({
       ref={canvasRef}
       width={width}
       height={height}
-      style={{ display: 'block' }}
+      style={{ display: 'block', width, height }}
     />
   );
 }

@@ -1,0 +1,266 @@
+{
+  "_meta": {
+    "title": "Cardiac Electrophysiology Reference Constants",
+    "version": "1.0",
+    "temperature": "37°C (physiological)",
+    "sources": [
+      "O'Hara-Rudy 2011 (ORd) — human ventricular",
+      "Ten Tusscher-Noble 2006 (TNNP) — human ventricular",
+      "Severi 2012 — human SA node",
+      "Courtemanche 1998 — human atrial",
+      "Maltsev-Lakatta 2009 — SA node Ca/M clock",
+      "Nerbonne & Kass 2005 — Physiol Rev ion channels",
+      "Bers 2001 — Excitation-Contraction Coupling",
+      "Dobrzynski 2007 — SA node anatomy/physiology",
+      "Boyett 2000 — SA node pacemaking"
+    ],
+    "instruction": "Use ONLY these values. Do NOT web search for cardiac electrophysiology constants. Do NOT estimate or invent values. If a value is absent, say so and ask the user."
+  },
+
+  "ECG_intervals_ms": {
+    "heart_rate_bpm": { "min": 60, "max": 100, "note": "Intrinsic sinus" },
+    "PR_interval": { "min": 120, "max": 200 },
+    "QRS_duration": { "min": 80, "max": 120 },
+    "QT_interval_at_60bpm": { "min": 350, "max": 440 },
+    "QTc_Bazett_male": { "max": 440 },
+    "QTc_Bazett_female": { "max": 460 },
+    "QTc_Fridericia": { "max": 430, "note": "Preferred for modeling" },
+    "P_wave_duration": { "min": 80, "max": 120 },
+    "PR_segment": { "min": 50, "max": 120 }
+  },
+
+  "intracardiac_conduction_ms": {
+    "PA_interval": { "min": 25, "max": 55, "correlate": "Intra-atrial" },
+    "AH_interval": { "min": 60, "max": 125, "correlate": "AV node" },
+    "HV_interval": { "min": 35, "max": 55, "correlate": "His-Purkinje" },
+    "AV_node_ERP": { "min": 230, "max": 430 },
+    "atrial_ERP": { "min": 180, "max": 300 },
+    "ventricular_ERP": { "min": 200, "max": 300 }
+  },
+
+  "automaticity_bpm": {
+    "SA_node_center": { "min": 60, "max": 100, "mechanism": "I_f + I_CaL + I_CaT (Ca clock + M clock)" },
+    "SA_node_periphery": { "min": 40, "max": 60 },
+    "AV_node": { "min": 40, "max": 60, "mechanism": "I_f + I_CaL" },
+    "bundle_of_His": { "min": 30, "max": 40, "mechanism": "I_f" },
+    "bundle_branches": { "min": 20, "max": 35 },
+    "Purkinje_fibers": { "min": 15, "max": 40, "note": "Highest I_f density" },
+    "ventricular_myocytes": { "max": 20, "note": "Abnormal automaticity only" }
+  },
+
+  "action_potential": {
+    "resting_membrane_potential_mV": {
+      "SA_node_center": { "MDP": -65, "range": [-55, -65], "note": "No true rest; MDP = max diastolic potential" },
+      "SA_node_periphery": { "range": [-65, -70] },
+      "AV_node": { "range": [-60, -70] },
+      "atrial_myocyte": { "range": [-75, -80] },
+      "ventricular_myocyte": { "range": [-85, -90] },
+      "Purkinje_fiber": { "range": [-90, -95], "note": "Highest I_K1 density" }
+    },
+    "APD90_ms_at_1Hz": {
+      "SA_node": { "min": 150, "max": 200, "note": "Rate-dependent" },
+      "AV_node": { "min": 200, "max": 350 },
+      "atrial_myocyte": { "min": 200, "max": 300 },
+      "ventricular_endocardium": { "min": 300, "max": 400 },
+      "ventricular_mid_M_cell": { "min": 350, "max": 450 },
+      "ventricular_epicardium": { "min": 250, "max": 350 },
+      "Purkinje_fiber": { "min": 300, "max": 500 }
+    },
+    "peak_overshoot_mV": {
+      "SA_node": { "min": 10, "max": 20 },
+      "AV_node": { "min": 10, "max": 20 },
+      "atrial_myocyte": { "min": 20, "max": 30 },
+      "ventricular_myocyte": { "min": 30, "max": 40 },
+      "Purkinje_fiber": { "min": 35, "max": 45 }
+    },
+    "dVdt_max_V_per_s": {
+      "SA_node": { "min": 1, "max": 10, "dominant_current": "I_CaL" },
+      "AV_node": { "min": 5, "max": 15, "dominant_current": "I_CaL" },
+      "atrial_myocyte": { "min": 100, "max": 300, "dominant_current": "I_Na" },
+      "ventricular_myocyte": { "min": 150, "max": 350, "dominant_current": "I_Na" },
+      "Purkinje_fiber": { "min": 500, "max": 800, "dominant_current": "I_Na", "note": "Highest in heart" }
+    }
+  },
+
+  "ion_channels": {
+    "I_Na": {
+      "G_Na_max_nS_pF": 75,
+      "model_source": "ORd 2011",
+      "E_Na_mV": { "min": 55, "max": 70 },
+      "activation_V_half_mV": { "min": -40, "max": -35 },
+      "inactivation_V_half_mV": { "min": -80, "max": -65 },
+      "time_to_peak_ms": { "min": 0.5, "max": 1.0 },
+      "recovery_tau_ms": { "min": 10, "max": 20 },
+      "absent_in": ["SA node center", "AV node center"]
+    },
+    "I_CaL": {
+      "G_CaL_max_cm3_uF_ms": { "min": 0.0001, "max": 0.0003 },
+      "E_Ca_mV": { "min": 45, "max": 60 },
+      "activation_V_half_mV": { "min": -10, "max": 5 },
+      "inactivation_V_half_mV": { "min": -35, "max": -25 },
+      "inactivation_tau_ms": { "min": 30, "max": 80 },
+      "present_in": "ALL cardiac cell types"
+    },
+    "I_Kr": {
+      "G_Kr_max_nS_pF": 0.046,
+      "model_source": "ORd 2011",
+      "E_K_mV": { "min": -95, "max": -90 },
+      "activation_V_half_mV": -21,
+      "gene": "KCNH2 (hERG)",
+      "pharmacology": "Blocked by: sotalol, dofetilide, cisapride, haloperidol, many antipsychotics",
+      "clinical_note": "Block → QT prolongation → TdP risk"
+    },
+    "I_Ks": {
+      "G_Ks_max_nS_pF": 0.0034,
+      "model_source": "ORd 2011",
+      "activation_V_half_mV": 20,
+      "activation_tau_ms": { "min": 100, "max": 1000, "note": "Very slow" },
+      "augmented_by": "β-adrenergic (cAMP/PKA phosphorylation)"
+    },
+    "I_K1": {
+      "G_K1_max_nS_pF": 0.1908,
+      "model_source": "ORd 2011",
+      "function": "Sets RMP; absent/minimal in nodal cells",
+      "rectification": "Strong inward rectifier; outward only at depolarized potentials"
+    },
+    "I_f": {
+      "activation_V_half_mV": { "min": -75, "max": -60 },
+      "ion_selectivity": "Mixed Na+/K+ (inward at diastolic potentials)",
+      "isoforms": {
+        "HCN4": "Dominant in SA node, AV node",
+        "HCN2": "Dominant in Purkinje fibers, ventricle"
+      },
+      "blocker": "Ivabradine (rate-selective, no inotropy)",
+      "function": "Phase 4 diastolic depolarization in pacemaker cells"
+    },
+    "I_to": {
+      "function": "Phase 1 repolarization notch",
+      "high_density_in": ["Epicardium", "Purkinje fibers"],
+      "low_density_in": ["Endocardium", "AV node"],
+      "isoforms": {
+        "I_to_fast": "Kv4.3 (KCND3); rapid recovery",
+        "I_to_slow": "Kv1.4; slow recovery"
+      }
+    },
+    "I_NaCa": {
+      "stoichiometry": "3 Na+ : 1 Ca2+ (electrogenic)",
+      "V_NaCa_max_pA_pF": 16,
+      "model_source": "ORd 2011",
+      "function": "Ca2+ extrusion; contributes to pacemaker diastolic depolarization (Ca clock)"
+    },
+    "I_NaK": {
+      "P_NaK_max_pA_pF": 70,
+      "model_source": "ORd 2011",
+      "net_current": "Outward (3 Na+ out, 2 K+ in)",
+      "blocker": "Digoxin / cardiac glycosides"
+    }
+  },
+
+  "calcium_handling": {
+    "Ca_i_diastolic_uM": { "min": 0.1, "max": 0.2 },
+    "Ca_i_systolic_peak_uM": { "min": 0.5, "max": 1.5 },
+    "Ca_SR_diastolic_mM": { "min": 0.8, "max": 1.2 },
+    "RyR2_release_threshold_uM": { "min": 0.2, "max": 0.3 },
+    "SERCA_Vmax_mM_per_ms": 0.006375,
+    "model_source": "ORd 2011"
+  },
+
+  "intracellular_ionic_concentrations_mM": {
+    "Na_i": { "min": 7, "max": 15 },
+    "K_i": { "min": 135, "max": 145 },
+    "Ca_i_diastolic_uM": { "min": 0.1, "max": 0.2 }
+  },
+
+  "extracellular_ionic_concentrations_mM": {
+    "Na_o": 140,
+    "K_o": { "physiological": 4.5, "range": [4.0, 5.4] },
+    "Ca_o": { "physiological": 1.8, "range": [1.8, 2.0] },
+    "Cl_o": 114
+  },
+
+  "conduction_velocity_m_per_s": {
+    "SA_node_internal": { "min": 0.02, "max": 0.05, "note": "Calcium-dependent AP" },
+    "atrial_muscle": { "min": 0.3, "max": 0.5 },
+    "internodal_tracts": { "min": 1.0, "max": 1.2, "note": "Bachmann's bundle" },
+    "AV_node": { "min": 0.02, "max": 0.05, "note": "Slowest; produces PR delay" },
+    "bundle_of_His": { "min": 1.2, "max": 2.0 },
+    "bundle_branches": { "min": 2.0, "max": 4.0 },
+    "Purkinje_fibers": { "min": 2.0, "max": 4.0, "note": "Fastest in heart" },
+    "ventricular_muscle": { "min": 0.3, "max": 1.0 }
+  },
+
+  "recommended_models": {
+    "ventricular": [
+      { "name": "ORd", "year": 2011, "species": "Human", "use": "PREFERRED — best validated human ventricular" },
+      { "name": "ToR-ORd", "year": 2019, "species": "Human", "use": "ORd with updated I_Na and Ca2+ handling" },
+      { "name": "TNNP", "year": 2006, "species": "Human", "use": "Standard; widely used" },
+      { "name": "LRd", "year": 1994, "species": "Guinea pig", "use": "Historical reference; simple" }
+    ],
+    "atrial": [
+      { "name": "Courtemanche", "year": 1998, "species": "Human", "use": "PREFERRED — standard human atrial" },
+      { "name": "Grandi-Pandit-Voigt", "year": 2011, "species": "Human", "use": "Updated Ca2+ handling" }
+    ],
+    "SA_node": [
+      { "name": "Severi", "year": 2012, "species": "Human", "use": "PREFERRED — best validated human SA node" },
+      { "name": "Maltsev-Lakatta", "year": 2009, "species": "Rabbit/general", "use": "Ca clock + M clock; foundational" },
+      { "name": "Zhang", "year": 2000, "species": "Human", "use": "Central and peripheral SA node" }
+    ],
+    "AV_node": [
+      { "name": "Inada", "year": 2009, "species": "Rabbit", "use": "AN/N/NH cell subtypes" },
+      { "name": "Zhu", "year": 2013, "species": "Human", "use": "PREFERRED — human AV node" }
+    ]
+  },
+
+  "autonomic_modulation": {
+    "beta1_adrenergic": {
+      "heart_rate": "increase",
+      "AV_conduction": "faster (shorter AH)",
+      "I_f": "increase (cAMP shifts activation positive)",
+      "I_CaL": "large increase (PKA phosphorylation)",
+      "I_Ks": "large increase (PKA)",
+      "APD": "net decrease"
+    },
+    "vagal_M2_ACh": {
+      "heart_rate": "decrease",
+      "AV_conduction": "slower (longer AH)",
+      "I_f": "decrease",
+      "I_CaL": "decrease",
+      "I_KACh": "large increase (GIRK; Kir3.1/3.4)",
+      "APD_effect": "decrease atria >> ventricle"
+    }
+  },
+
+  "cell_geometry": {
+    "human_ventricular": {
+      "capacitance_pF": 153,
+      "volume_pL": 33.25,
+      "surface_to_volume_um_inv": 0.2,
+      "model_source": "ORd 2011"
+    },
+    "human_atrial": {
+      "capacitance_pF": 100,
+      "volume_pL": 20,
+      "surface_to_volume_um_inv": 0.2
+    },
+    "SA_node_human": {
+      "capacitance_pF": { "min": 20, "max": 60 },
+      "volume_pL": { "min": 1, "max": 5 }
+    }
+  },
+
+  "numerical_integration": {
+    "timestep_explicit_Euler_ms": { "min": 0.001, "max": 0.01, "note": "Smaller for stiff I_Na" },
+    "timestep_Rush_Larsen_ms": { "min": 0.01, "max": 0.1, "note": "More stable for gating vars" },
+    "timestep_adaptive_RK45": "auto (abs/rel tol ~1e-6)",
+    "stimulus_duration_ms": { "min": 0.5, "max": 2.0 },
+    "stimulus_amplitude_pA_pF": { "note": "2× diastolic threshold; typically -50 to -80" },
+    "pacing_CL_for_1Hz_ms": 1000,
+    "beats_to_steady_state": { "ORd": 300, "general": [100, 500] }
+  },
+
+  "temperature": {
+    "target": "37°C",
+    "Q10_ion_channels": { "min": 2.0, "max": 3.0 },
+    "correction_note": "Most published models already incorporate 37°C corrections internally"
+  }
+}

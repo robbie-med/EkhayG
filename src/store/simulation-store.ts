@@ -31,6 +31,9 @@ interface SimulationState {
   showStandardElectrodes: boolean;
   isPlacementMode: boolean;
 
+  // Segment debug toggles
+  disabledSegments: string[];
+
   theme: Theme;
   setTheme: (t: Theme) => void;
 
@@ -38,6 +41,10 @@ interface SimulationState {
   setHeartRate: (bpm: number) => void;
   toggleCondition: (id: string) => void;
   toggleArtery: (key: ArteryKey) => void;
+  toggleSegment: (id: string) => void;
+  enableAllSegments: () => void;
+  disableAllSegments: (allIds: string[]) => void;
+  soloSegment: (id: string, allIds: string[]) => void;
   setDisplayMode: (mode: DisplayMode) => void;
   setPlaybackSpeed: (speed: PlaybackSpeed) => void;
   setGain: (gain: 5 | 10 | 20) => void;
@@ -71,8 +78,18 @@ export const useSimulationStore = create<SimulationState>((set) => ({
   customElectrodePos: null,
   showStandardElectrodes: false,
   isPlacementMode: false,
+  disabledSegments: [],
 
   setHeartRate: (bpm) => set({ heartRateBpm: bpm }),
+  toggleSegment: (id) =>
+    set((s) => ({
+      disabledSegments: s.disabledSegments.includes(id)
+        ? s.disabledSegments.filter((x) => x !== id)
+        : [...s.disabledSegments, id],
+    })),
+  enableAllSegments: () => set({ disabledSegments: [] }),
+  disableAllSegments: (allIds) => set({ disabledSegments: [...allIds] }),
+  soloSegment: (id, allIds) => set({ disabledSegments: allIds.filter((x) => x !== id) }),
   toggleCondition: (id) =>
     set((s) => ({
       activeConditions: s.activeConditions.includes(id)

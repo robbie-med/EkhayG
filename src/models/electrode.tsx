@@ -14,7 +14,7 @@
 
 import { useMemo } from 'react';
 import { useSimulationStore } from '../store/simulation-store';
-import { ELECTRODE_POSITIONS } from '../engine/lead-calculator';
+import { ELECTRODE_POSITIONS_SCENE } from '../engine/lead-calculator';
 import { vectorToScene } from '../engine/coordinates';
 import type { Vec3 } from '../engine/cardiac-vector';
 
@@ -86,7 +86,7 @@ export function ElectrodeMarkers() {
       {/* Standard 12-lead electrodes */}
       {showStandard &&
         STANDARD_NAMES.map((name) => {
-          const vecPos = ELECTRODE_POSITIONS[name] as Vec3;
+          const vecPos = ELECTRODE_POSITIONS_SCENE[name] as Vec3;
           const scPos = vectorToScene(vecPos);
           return (
             <group key={name}>

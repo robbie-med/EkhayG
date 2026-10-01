@@ -11,8 +11,7 @@ import { Box3, Vector3, MeshStandardMaterial, Mesh } from 'three';
 import type { Group, Object3D } from 'three';
 import { CoronaryArteries } from './coronary-arteries';
 import { VCGLoopTrail, VectorArrow, IschemiaVectors, ConditionVectors } from '../components/VectorDisplay';
-import { getDefaultTimings } from '../engine/cardiac-vector';
-import { getCombinedPathology } from '../engine/pathology';
+import { updateSimulation } from '../engine/simulation-cache';
 import { useSimulationStore } from '../store/simulation-store';
 
 // Shared materials — semi-transparent so VCG loop is visible inside
@@ -70,20 +69,19 @@ export function HeartGroup() {
 
     const { heartRateBpm, playbackSpeed, activeConditions, arteries } =
       useSimulationStore.getState();
-    const combined = getCombinedPathology(activeConditions, arteries);
-    const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
-    const cycleLen = 60000 / heartRateBpm;
+
+    // Ensure simulation is up to date
+    const sim = updateSimulation({ heartRateBpm, activeConditions, arteries });
+    const { qrsStart, qrsEnd, cycleLength } = sim.activationMap.phaseBoundaries;
 
     cycleTimeMsRef.current =
-      (cycleTimeMsRef.current + delta * 1000 * playbackSpeed) % cycleLen;
+      (cycleTimeMsRef.current + delta * 1000 * playbackSpeed) % cycleLength;
 
-    const qrsStart = timings.pDuration + timings.prDuration;
-    const qrsEnd = qrsStart + timings.qrsDuration;
     const t = cycleTimeMsRef.current;
 
     let scale = 1.0;
     if (t >= qrsStart && t <= qrsEnd) {
-      const progress = (t - qrsStart) / timings.qrsDuration;
+      const progress = (t - qrsStart) / (qrsEnd - qrsStart);
       scale = 1.0 + 0.06 * Math.sin(progress * Math.PI);
     }
 

@@ -3,16 +3,36 @@
  * Windows XP–styled vertical control panel.
  */
 
+import { useState } from 'react';
 import { useSimulationStore } from '../store/simulation-store';
-import { CONDITION_PRESETS, getCombinedPathology } from '../engine/pathology';
+import { CONDITION_PRESETS } from '../engine/pathology';
 import { ELECTRODE_POSITIONS } from '../engine/lead-calculator';
-import { getDefaultTimings } from '../engine/cardiac-vector';
+import { updateSimulation } from '../engine/simulation-cache';
+import { setDisabledSegments } from '../engine/cardiac-vector';
 import { computeQRSAxis, axisInterpretation } from '../engine/axis-calculator';
+import { buildDefaultSegments } from '../engine/heart-model';
 import type { Vec3 } from '../engine/cardiac-vector';
 
 const ARTERY_LABELS: Record<string, string> = {
   lad: 'LAD', d1: 'D1', lcx: 'LCx', om: 'OM', rca: 'RCA', pda: 'PDA',
 };
+
+// Build segment list once, grouped by chamber
+const ALL_SEGMENTS = buildDefaultSegments();
+const ALL_SEGMENT_IDS = ALL_SEGMENTS.map((s) => s.id);
+
+const SEGMENT_GROUPS: { label: string; chamber: string; ids: string[] }[] = [
+  { label: 'RA', chamber: 'ra', ids: ALL_SEGMENTS.filter((s) => s.chamber === 'ra').map((s) => s.id) },
+  { label: 'LA', chamber: 'la', ids: ALL_SEGMENTS.filter((s) => s.chamber === 'la').map((s) => s.id) },
+  { label: 'Septum', chamber: 'septum', ids: ALL_SEGMENTS.filter((s) => s.chamber === 'septum').map((s) => s.id) },
+  { label: 'LV', chamber: 'lv', ids: ALL_SEGMENTS.filter((s) => s.chamber === 'lv').map((s) => s.id) },
+  { label: 'RV', chamber: 'rv', ids: ALL_SEGMENTS.filter((s) => s.chamber === 'rv').map((s) => s.id) },
+];
+
+// Short display name: strip chamber prefix
+function segLabel(id: string): string {
+  return id.replace(/^(lv|rv|sept|ra|la)-/, '');
+}
 
 const CONDITION_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Conduction',  ids: ['lbbb', 'rbbb', 'wpw'] },
@@ -126,12 +146,17 @@ export function ControlPanel() {
     showVectorArrow, setShowVectorArrow,
     showVCGLoop, setShowVCGLoop,
     theme, setTheme,
+    disabledSegments, toggleSegment, enableAllSegments, disableAllSegments, soloSegment,
   } = useSimulationStore();
 
-  // Compute QRS axis — fast enough to compute inline (120 Bézier samples per render)
-  const combined = getCombinedPathology(activeConditions, arteries);
-  const timings = { ...getDefaultTimings(heartRateBpm), ...combined.timingOverrides };
-  const qrsAxisDeg = computeQRSAxis(timings, combined.qrsSegments);
+  const [segPanelOpen, setSegPanelOpen] = useState(false);
+
+  // Sync disabled segments to engine
+  setDisabledSegments(disabledSegments);
+
+  // Ensure simulation is up to date and compute QRS axis
+  updateSimulation({ heartRateBpm, activeConditions, arteries });
+  const qrsAxisDeg = computeQRSAxis();
 
   return (
     <div className="xp-panel" style={{ display: 'flex', flexDirection: 'column', gap: 0, height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
@@ -266,7 +291,7 @@ export function ControlPanel() {
             onClick={() => setIsPlacementMode(!isPlacementMode)}
             style={isPlacementMode ? { animation: 'none', background: '#cc6600', borderColor: '#884400' } : {}}
           >
-            {isPlacementMode ? 'Click torso…' : 'Place Custom'}
+            {isPlacementMode ? 'Click torso...' : 'Place Custom'}
           </button>
           {customElectrodePos && (
             <button className="xp-btn" onClick={() => setCustomElectrodePos(null)}>Clear</button>
@@ -293,6 +318,50 @@ export function ControlPanel() {
             ? `Custom: (${customElectrodePos.map((v) => v.toFixed(2)).join(', ')})`
             : 'Place custom electrode on torso'}
         </div>
+      </Group>
+
+      {/* Segment Debug Toggles */}
+      <Group title="Segments">
+        <div style={{ display: 'flex', gap: 3, marginBottom: 4, flexWrap: 'wrap' }}>
+          <button className="xp-btn" onClick={() => setSegPanelOpen(!segPanelOpen)} style={{ fontSize: 10 }}>
+            {segPanelOpen ? 'Hide' : 'Show'} ({ALL_SEGMENT_IDS.length - disabledSegments.length}/{ALL_SEGMENT_IDS.length} on)
+          </button>
+          {disabledSegments.length > 0 && (
+            <button className="xp-btn" onClick={enableAllSegments} style={{ fontSize: 10 }}>All On</button>
+          )}
+          {disabledSegments.length < ALL_SEGMENT_IDS.length && (
+            <button className="xp-btn" onClick={() => disableAllSegments(ALL_SEGMENT_IDS)} style={{ fontSize: 10 }}>All Off</button>
+          )}
+        </div>
+        {segPanelOpen && SEGMENT_GROUPS.map((g) => (
+          <div key={g.chamber} style={{ marginBottom: 5 }}>
+            <div style={{ fontSize: 9, color: 'var(--xp-text-muted)', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {g.label} ({g.ids.filter((id) => !disabledSegments.includes(id)).length}/{g.ids.length})
+            </div>
+            <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              {g.ids.map((id) => {
+                const on = !disabledSegments.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleSegment(id)}
+                    onContextMenu={(e) => { e.preventDefault(); soloSegment(id, ALL_SEGMENT_IDS); }}
+                    className={`xp-btn${on ? ' active' : ''}`}
+                    title={`${id}${on ? ' (ON)' : ' (OFF)'} — right-click to solo`}
+                    style={{
+                      padding: '1px 4px',
+                      fontSize: 9,
+                      opacity: on ? 1 : 0.4,
+                      minWidth: 0,
+                    }}
+                  >
+                    {segLabel(id)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </Group>
 
     </div>

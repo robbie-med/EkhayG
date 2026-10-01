@@ -1,37 +1,29 @@
 /**
  * axis-calculator.ts
- * Computes mean frontal plane QRS axis from the cardiac vector model.
+ * Computes mean frontal plane QRS axis from the propagation-based cardiac vector model.
  * Axis = direction of the mean QRS vector in the frontal plane (X-Y in Frank coords).
  */
 
-import { getCardiacVector } from './cardiac-vector';
-import type { BezierSegment3D, CycleTimings } from './cardiac-vector';
+import { getSimulationState } from './simulation-cache';
 
 /** Mean frontal plane axis in degrees (-180 to +180).
  *  Convention: 0° = Lead I direction (leftward), +90° = aVF direction (inferior).
- *  Normal axis: -30° to +90°.
+ *  Normal axis: -30° to +90°. Uses the cached dipole (same data the leads are drawn from).
  */
-export function computeQRSAxis(
-  timings: CycleTimings,
-  qrsSegments: BezierSegment3D[],
-): number {
-  const { pDuration, prDuration, qrsDuration } = timings;
-  const qrsStart = pDuration + prDuration;
-  const N = 120;
+export function computeQRSAxis(): number {
+  const sim = getSimulationState();
+  const { qrsStart, qrsEnd } = sim.activationMap.phaseBoundaries;
+  const { x, y, cycleLengthMs } = sim.dipoleCache;
+  if (qrsEnd <= qrsStart) return 0;
+
   let sumX = 0;
   let sumY = 0;
-
-  for (let i = 0; i < N; i++) {
-    const t = qrsStart + (i / (N - 1)) * qrsDuration;
-    const state = getCardiacVector(t, timings, [0, 0, 0], qrsSegments);
-    // Frank X+ = leftward = Lead I direction
-    // Frank Y+ = inferior = aVF direction
-    sumX += state.vector[0];
-    sumY += state.vector[1];
+  for (let t = Math.max(0, Math.floor(qrsStart)); t <= Math.min(cycleLengthMs - 1, Math.ceil(qrsEnd)); t++) {
+    sumX += x[t];
+    sumY += y[t];
   }
 
   const deg = Math.atan2(sumY, sumX) * (180 / Math.PI);
-  // Round to nearest degree
   return Math.round(deg);
 }
 
