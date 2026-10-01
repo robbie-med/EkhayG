@@ -98,8 +98,8 @@ function ArteryGroup({ geometries, patent }: ArteryGroupProps) {
 export function CoronaryArteries() {
   const arteries = useSimulationStore((s) => s.arteries);
 
-  const { scene: vascScene } = useGLTF('/3d-vh-m-blood-vasculature.glb');
-  const { scene: heartScene } = useGLTF('/3d-vh-m-heart.glb');
+  const { scene: vascScene } = useGLTF(`${import.meta.env.BASE_URL}3d-vh-m-blood-vasculature.glb`);
+  const { scene: heartScene } = useGLTF(`${import.meta.env.BASE_URL}3d-vh-m-heart.glb`);
 
   // Extract geometries and compute centering offset to match the heart
   const { centerOffset, ladGeos, d1Geos, lcxGeos, omGeos, rcaGeos, pdaGeos } = useMemo(() => {
@@ -131,4 +131,4 @@ export function CoronaryArteries() {
   );
 }
 
-useGLTF.preload('/3d-vh-m-blood-vasculature.glb');
+useGLTF.preload(`${import.meta.env.BASE_URL}3d-vh-m-blood-vasculature.glb`);
